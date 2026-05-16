@@ -1108,6 +1108,11 @@ def _extract_username(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+_GROUP_TARGET_WORDS = re.compile(
+    r"в\s+групп[уеа]|группу|group", re.IGNORECASE
+)
+
+
 async def _handle_message_send(
     msg, context: ContextTypes.DEFAULT_TYPE, chat_id: int
 ) -> None:
@@ -1124,12 +1129,20 @@ async def _handle_message_send(
         "  Chat_lookup"
     )
 
+    is_group_target = bool(_GROUP_TARGET_WORDS.search(msg.text))
+
     target_username = _extract_username(msg.text)
     target_chat = None
-    if target_username:
+
+    if is_group_target:
+        groups = await db.get_known_group_chats()
+        if groups:
+            target_chat = groups[0]
+
+    if not target_chat and target_username:
         target_chat = await db.find_chat_by_username(target_username)
 
-    if not target_chat:
+    if not target_chat and not is_group_target:
         chats = await db.get_known_chats()
         for c in chats:
             if c["chat_id"] != chat_id and c.get("user_id") != OWNER_ID:
@@ -1137,7 +1150,25 @@ async def _handle_message_send(
                 break
 
     if not target_chat:
-        bc = await db.get_any_business_connection()
+        target_label = f"@{target_username}" if target_username else ("группу" if is_group_target else "получатель")
+        _add_to_history(chat_id, "assistant", f"Не найден чат {target_label}. Текст: {composed}")
+        await status_msg.edit_text(
+            "Отправляю сообщение\n"
+            "Tools:\n  Compose_message ✓\n"
+            f"  Chat_lookup — не найден чат {target_label}\n\n"
+            + ("Добавь бота в группу и напиши там хотя бы одно сообщение." if is_group_target
+               else "Пользователь должен сначала написать тебе, чтобы бот увидел его через Business API.")
+        )
+        return
+
+    send_chat_id = target_chat["chat_id"]
+    chat_name = target_chat.get("first_name") or f"@{target_username or send_chat_id}"
+    is_group = send_chat_id < 0
+
+    if not is_group:
+        bc = await db.get_business_connection_for_chat(send_chat_id)
+        if not bc:
+            bc = await db.get_any_business_connection()
         if not bc:
             _add_to_history(chat_id, "assistant", f"Нет бизнес-подключения. Текст: {composed}")
             await status_msg.edit_text(
@@ -1147,39 +1178,16 @@ async def _handle_message_send(
                 "Подключи бота как бизнес-бота в настройках Telegram."
             )
             return
-        target_label = f"@{target_username}" if target_username else "получатель"
-        _add_to_history(chat_id, "assistant", f"Не найден чат {target_label}. Текст: {composed}")
-        await status_msg.edit_text(
-            "Отправляю сообщение\n"
-            "Tools:\n  Compose_message ✓\n"
-            f"  Chat_lookup — не найден чат {target_label}\n\n"
-            "Пользователь должен сначала написать тебе, чтобы бот увидел его через Business API."
-        )
-        return
-
-    bc = await db.get_business_connection_for_chat(target_chat["chat_id"])
-    if not bc:
-        bc = await db.get_any_business_connection()
-
-    if not bc:
-        _add_to_history(chat_id, "assistant", f"Нет бизнес-подключения. Текст: {composed}")
-        await status_msg.edit_text(
-            "Отправляю сообщение\n"
-            "Tools:\n  Compose_message ✓\n"
-            "  Chat_lookup — нет бизнес-подключения\n\n"
-            "Подключи бота как бизнес-бота в настройках Telegram."
-        )
-        return
-
-    send_chat_id = target_chat["chat_id"]
-    chat_name = target_chat.get("first_name") or f"@{target_username or send_chat_id}"
 
     try:
-        await context.bot.send_message(
-            chat_id=send_chat_id,
-            text=composed,
-            business_connection_id=bc["connection_id"],
-        )
+        if is_group:
+            await context.bot.send_message(chat_id=send_chat_id, text=composed)
+        else:
+            await context.bot.send_message(
+                chat_id=send_chat_id,
+                text=composed,
+                business_connection_id=bc["connection_id"],
+            )
         _add_to_history(chat_id, "assistant", f"Отправлено {chat_name}: {composed}")
         await status_msg.edit_text(
             "Отправляю сообщение\n"
@@ -1242,12 +1250,19 @@ async def _handle_schedule_message(
         "  Chat_lookup"
     )
 
+    is_group_target = bool(_GROUP_TARGET_WORDS.search(msg.text))
     target_username = _extract_username(msg.text)
     target_chat = None
-    if target_username:
+
+    if is_group_target:
+        groups = await db.get_known_group_chats()
+        if groups:
+            target_chat = groups[0]
+
+    if not target_chat and target_username:
         target_chat = await db.find_chat_by_username(target_username)
 
-    if not target_chat:
+    if not target_chat and not is_group_target:
         chats = await db.get_known_chats()
         for c in chats:
             if c["chat_id"] != chat_id and c.get("user_id") != OWNER_ID:
@@ -1255,32 +1270,25 @@ async def _handle_schedule_message(
                 break
 
     if not target_chat:
-        bc = await db.get_any_business_connection()
-        if not bc:
-            _add_to_history(chat_id, "assistant", f"Нет бизнес-подключения. Текст: {composed}")
-            await status_msg.edit_text(
-                "Планирую сообщение\n"
-                "Tools:\n  Parse_time ✓\n"
-                "  Compose_message ✓\n"
-                "  Chat_lookup — нет бизнес-подключения\n\n"
-                "Подключи бота как бизнес-бота в настройках Telegram."
-            )
-            return
-        target_label = f"@{target_username}" if target_username else "получатель"
+        target_label = f"@{target_username}" if target_username else ("группу" if is_group_target else "получатель")
         _add_to_history(chat_id, "assistant", f"Не найден чат {target_label}. Текст: {composed}")
         await status_msg.edit_text(
             "Планирую сообщение\n"
             "Tools:\n  Parse_time ✓\n"
             "  Compose_message ✓\n"
             f"  Chat_lookup — не найден чат {target_label}\n\n"
-            "Пользователь должен сначала написать тебе, чтобы бот увидел его через Business API."
+            + ("Добавь бота в группу и напиши там хотя бы одно сообщение." if is_group_target
+               else "Пользователь должен сначала написать тебе, чтобы бот увидел его через Business API.")
         )
         return
 
     target_chat_id = target_chat["chat_id"]
-    bc = await db.get_business_connection_for_chat(target_chat_id)
-    if not bc:
-        bc = await db.get_any_business_connection()
+    is_group = target_chat_id < 0
+    bc = None
+    if not is_group:
+        bc = await db.get_business_connection_for_chat(target_chat_id)
+        if not bc:
+            bc = await db.get_any_business_connection()
 
     await db.add_scheduled_message(
         owner_id=OWNER_ID,

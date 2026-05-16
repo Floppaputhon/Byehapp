@@ -618,6 +618,20 @@ async def export_chat_messages(
         return [dict(r) for r in rows]
 
 
+async def get_known_group_chats() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT DISTINCT chat_id, first_name "
+            "FROM messages WHERE business_connection_id IS NULL "
+            "AND chat_id < 0 "
+            "GROUP BY chat_id "
+            "ORDER BY MAX(date) DESC LIMIT 20"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
 # ── Group-specific queries ───────────────────────────────────────────
 
 
