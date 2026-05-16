@@ -348,8 +348,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/access — настройка доступа в группах\n"
         "/whoami — твой ID и инфо\n"
         "/help — справка\n\n"
+        "<b>Команды для групп:</b>\n"
+        "/groupstats [часы] — статистика группы\n"
+        "/groupsummary [часы] — AI-пересказ группы\n"
+        "/top — топ участников группы\n"
+        "/groupsearch [запрос] — поиск в группе\n\n"
         "Также можешь просто писать мне — я пойму!\n"
         "Отправь фото — я опишу что на нём.\n"
+        "В группе — упомяни меня или ответь на моё сообщение.\n"
         "Подключи меня как бизнес-бота в настройках Telegram!"
     )
     await _safe_reply(update.message, text, parse_mode="HTML")
@@ -382,6 +388,12 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/qr save/list/use — шаблоны ответов\n"
         "/access [owner/admins/all] — доступ в группах\n"
         "/whoami — твой Telegram ID\n\n"
+        "<b>Группы:</b>\n\n"
+        "/groupstats [часы] — статистика группы\n"
+        "/groupsummary [часы] — AI-пересказ группы\n"
+        "/top — топ участников группы\n"
+        "/groupsearch [запрос] — поиск по группе\n"
+        "Упомяни меня @bot или ответь — отвечу на вопрос\n\n"
         "<b>Фото:</b> отправь фото — я опишу что на нём\n\n"
         "<b>Текстом:</b>\n"
         "• \"Срочно!\" → приоритет чатов\n"
@@ -1847,6 +1859,238 @@ async def cmd_priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"  Pending_check ✓ → {len(chats)} чатов\n"
         f"  Priority_rank ✓\n\n{ranking}"
     )
+
+
+# ── Group handlers ───────────────────────────────────────────────────
+
+
+async def handle_group_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Track all messages in groups where the bot is a member."""
+    msg = update.message
+    if not msg:
+        return
+
+    user = msg.from_user
+    media_type, file_id = _get_media_info(msg)
+
+    await db.save_group_message(
+        chat_id=msg.chat.id,
+        message_id=msg.message_id,
+        user_id=user.id if user else None,
+        username=user.username if user else None,
+        first_name=user.first_name if user else None,
+        text=msg.text,
+        media_type=media_type,
+        file_id=file_id,
+        caption=msg.caption,
+        date=msg.date.isoformat() if msg.date else datetime.datetime.now().isoformat(),
+    )
+
+
+async def cmd_groupstats(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Show message statistics for the current group."""
+    if not await _check_group_access(update):
+        return
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+
+    hours = 24
+    if context.args:
+        try:
+            hours = min(int(context.args[0]), 720)
+        except ValueError:
+            pass
+
+    stats = await db.get_group_stats(chat.id, hours)
+
+    if not stats:
+        await update.message.reply_text(
+            f"Нет сообщений за последние {hours} ч."
+        )
+        return
+
+    total = sum(s["msg_count"] for s in stats)
+    total_media = sum(s["media_count"] for s in stats)
+
+    text = (
+        f"<b>Статистика группы за {hours} ч.</b>\n\n"
+        f"Всего сообщений: {total}\n"
+        f"Медиа: {total_media}\n"
+        f"Участников: {len(stats)}\n\n"
+        f"<b>По участникам:</b>\n"
+    )
+    for i, s in enumerate(stats[:15], 1):
+        name = s["first_name"] or "Неизвестный"
+        username = f" @{s['username']}" if s.get("username") else ""
+        text += f"{i}. {name}{username} — {s['msg_count']} сообщ."
+        if s["media_count"]:
+            text += f" ({s['media_count']} медиа)"
+        text += "\n"
+
+    await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+async def cmd_groupsummary(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """AI summary of recent messages in the group."""
+    if not await _check_group_access(update):
+        return
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+
+    hours = 24
+    if context.args:
+        try:
+            hours = min(int(context.args[0]), 168)
+        except ValueError:
+            pass
+
+    status_msg = await update.message.reply_text(
+        f"Анализирую чат за {hours} ч.\nTools:\n  Group_read\n  AI_summary"
+    )
+
+    messages = await db.get_group_recent_messages(chat.id, hours)
+
+    if not messages:
+        await status_msg.edit_text(
+            f"Нет сообщений за последние {hours} ч."
+        )
+        return
+
+    await status_msg.edit_text(
+        f"Анализирую чат за {hours} ч.\nTools:\n"
+        f"  Group_read ✓ → {len(messages)} сообщений\n"
+        f"  AI_summary — генерирую..."
+    )
+
+    summary = await ai_client.summarize_messages(messages)
+
+    await status_msg.edit_text(
+        f"Анализирую чат за {hours} ч.\nTools:\n"
+        f"  Group_read ✓ → {len(messages)} сообщений\n"
+        f"  AI_summary ✓\n\n{summary}"
+    )
+
+
+async def cmd_top(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show top contributors in the group (all time)."""
+    if not await _check_group_access(update):
+        return
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+
+    members = await db.get_group_top_members(chat.id, limit=10)
+
+    if not members:
+        await update.message.reply_text("Ещё нет данных о сообщениях в этой группе.")
+        return
+
+    text = "<b>Топ участников (за всё время):</b>\n\n"
+    medals = ["🥇", "🥈", "🥉"]
+    for i, m in enumerate(members):
+        prefix = medals[i] if i < 3 else f"{i + 1}."
+        name = m["first_name"] or "Неизвестный"
+        username = f" @{m['username']}" if m.get("username") else ""
+        uid = m.get("user_id") or ""
+        last_msg = (m.get("last_msg") or "")[:16].replace("T", " ")
+        text += (
+            f"{prefix} <b>{name}</b>{username}\n"
+            f"    🆔 <code>{uid}</code>\n"
+            f"    💬 {m['msg_count']} сообщ. | Последнее: {last_msg}\n\n"
+        )
+
+    await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+async def cmd_groupsearch(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Search messages in the current group."""
+    if not await _check_group_access(update):
+        return
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+
+    if not context.args:
+        await update.message.reply_text("Использование: /groupsearch [запрос]")
+        return
+
+    query = " ".join(context.args)
+    results = await db.search_group_messages(chat.id, query)
+
+    if not results:
+        await update.message.reply_text(f'По запросу "{query}" ничего не найдено.')
+        return
+
+    text = f'<b>Результаты в группе по "{query}":</b>\n\n'
+    for msg in results[:10]:
+        name = msg.get("first_name") or "Неизвестный"
+        username = f" @{msg['username']}" if msg.get("username") else ""
+        content = msg.get("text") or msg.get("caption") or ""
+        date_str = (msg.get("date") or "")[:16].replace("T", " ")
+        text += f"👤 <b>{name}</b>{username}\n"
+        text += f"📅 {date_str}\n"
+        if content:
+            text += f"{content[:200]}\n"
+        text += "\n"
+
+    await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+async def handle_group_question(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """AI Q&A in groups — responds when bot is mentioned or replied to."""
+    msg = update.message
+    if not msg or not msg.text:
+        return
+
+    if msg.text.startswith("/"):
+        return
+
+    bot_username = (context.bot.username or "").lower()
+    is_reply_to_bot = (
+        msg.reply_to_message
+        and msg.reply_to_message.from_user
+        and msg.reply_to_message.from_user.id == context.bot.id
+    )
+    is_mention = bot_username and f"@{bot_username}".lower() in msg.text.lower()
+
+    if not is_reply_to_bot and not is_mention:
+        return
+
+    if not await _check_group_access(update):
+        return
+
+    chat_id = msg.chat.id
+    user_text = msg.text.replace(f"@{bot_username}", "").strip() if bot_username else msg.text
+
+    if not user_text:
+        await msg.reply_text("Напиши вопрос после упоминания!")
+        return
+
+    _add_to_history(chat_id, "user", user_text)
+    history = _get_history(chat_id)
+
+    status_msg = await msg.reply_text("Думаю...")
+
+    response = await ai_client.ai_chat(user_text, history=history)
+    _add_to_history(chat_id, "assistant", response)
+
+    await status_msg.edit_text(response)
 
 
 # ── Photo handler ────────────────────────────────────────────────────

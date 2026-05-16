@@ -82,6 +82,12 @@ def main() -> None:
     app.add_handler(CommandHandler("whoami", handlers.cmd_whoami))
     app.add_handler(CommandHandler("access", handlers.cmd_access))
 
+    # Group-specific commands
+    app.add_handler(CommandHandler("groupstats", handlers.cmd_groupstats))
+    app.add_handler(CommandHandler("groupsummary", handlers.cmd_groupsummary))
+    app.add_handler(CommandHandler("top", handlers.cmd_top))
+    app.add_handler(CommandHandler("groupsearch", handlers.cmd_groupsearch))
+
     # Photo message handler
     app.add_handler(
         MessageHandler(
@@ -104,6 +110,22 @@ def main() -> None:
             filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
             handlers.handle_direct_question,
         )
+    )
+
+    # Group message tracking + AI Q&A (mention/reply to bot)
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+            handlers.handle_group_question,
+        ),
+        group=1,
+    )
+    app.add_handler(
+        MessageHandler(
+            filters.ALL & filters.ChatType.GROUPS,
+            handlers.handle_group_message,
+        ),
+        group=2,
     )
 
     # Periodic reminder check every 60 seconds

@@ -616,3 +616,99 @@ async def export_chat_messages(
             )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+
+# ── Group-specific queries ───────────────────────────────────────────
+
+
+async def save_group_message(
+    chat_id: int,
+    message_id: int,
+    user_id: int | None,
+    username: str | None,
+    first_name: str | None,
+    text: str | None,
+    media_type: str | None,
+    file_id: str | None,
+    caption: str | None,
+    date: str,
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            """INSERT OR REPLACE INTO messages
+            (business_connection_id, chat_id, message_id, user_id, username,
+             first_name, text, media_type, file_id, caption, date)
+            VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (chat_id, message_id, user_id, username,
+             first_name, text, media_type, file_id, caption, date),
+        )
+        await conn.commit()
+
+
+async def get_group_stats(chat_id: int, hours: int = 24) -> list[dict]:
+    cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """SELECT
+                user_id, first_name, username,
+                COUNT(*) as msg_count,
+                SUM(CASE WHEN media_type IS NOT NULL THEN 1 ELSE 0 END) as media_count
+            FROM messages
+            WHERE chat_id = ? AND date > ?
+            GROUP BY user_id
+            ORDER BY msg_count DESC""",
+            (chat_id, cutoff),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_group_top_members(chat_id: int, limit: int = 10) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """SELECT
+                user_id, first_name, username,
+                COUNT(*) as msg_count,
+                MIN(date) as first_msg,
+                MAX(date) as last_msg
+            FROM messages
+            WHERE chat_id = ?
+            GROUP BY user_id
+            ORDER BY msg_count DESC
+            LIMIT ?""",
+            (chat_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_group_recent_messages(
+    chat_id: int, hours: int = 24, limit: int = 200
+) -> list[dict]:
+    cutoff = (datetime.datetime.now() - datetime.timedelta(hours=hours)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM messages WHERE chat_id = ? AND date > ? "
+            "ORDER BY date DESC LIMIT ?",
+            (chat_id, cutoff, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def search_group_messages(
+    chat_id: int, query: str, limit: int = 20
+) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM messages WHERE chat_id = ? "
+            "AND (text LIKE ? OR caption LIKE ?) "
+            "ORDER BY date DESC LIMIT ?",
+            (chat_id, f"%{query}%", f"%{query}%", limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
