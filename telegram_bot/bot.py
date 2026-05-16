@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Telegram Business AI Assistant Bot — entry point."""
+
+import logging
+
+from telegram.ext import (
+    Application,
+    BusinessConnectionHandler,
+    BusinessMessagesDeletedHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
+
+from config import BOT_TOKEN
+import database as db
+import handlers
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+
+def main() -> None:
+    if not BOT_TOKEN:
+        logger.error("BOT_TOKEN is not set! Create a .env file with BOT_TOKEN=...")
+        return
+
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    # Business API handlers
+    app.add_handler(BusinessConnectionHandler(handlers.handle_business_connection))
+    app.add_handler(
+        BusinessMessagesDeletedHandler(handlers.handle_deleted_business_messages)
+    )
+    app.add_handler(
+        MessageHandler(
+            filters.UpdateType.BUSINESS_MESSAGE, handlers.handle_business_message
+        )
+    )
+    app.add_handler(
+        MessageHandler(
+            filters.UpdateType.EDITED_BUSINESS_MESSAGE,
+            handlers.handle_edited_business_message,
+        )
+    )
+
+    # Command handlers (direct messages to the bot)
+    app.add_handler(CommandHandler("start", handlers.cmd_start))
+    app.add_handler(CommandHandler("help", handlers.cmd_help))
+    app.add_handler(CommandHandler(["deleted", "udалённые"], handlers.cmd_deleted))
+    app.add_handler(CommandHandler(["summary", "итоги"], handlers.cmd_summary))
+    app.add_handler(CommandHandler(["remind", "напомни"], handlers.cmd_remind))
+    app.add_handler(CommandHandler(["pending", "ответить"], handlers.cmd_pending))
+    app.add_handler(CommandHandler(["stats", "статистика"], handlers.cmd_stats))
+    app.add_handler(CommandHandler(["search", "поиск"], handlers.cmd_search))
+    app.add_handler(CommandHandler(["translate", "перевод"], handlers.cmd_translate))
+    app.add_handler(CommandHandler(["analyze", "анализ"], handlers.cmd_analyze))
+    app.add_handler(
+        CommandHandler(["myreminders", "напоминания"], handlers.cmd_myreminders)
+    )
+
+    # Periodic reminder check every 60 seconds
+    job_queue = app.job_queue
+    job_queue.run_repeating(handlers.check_reminders, interval=60, first=10)
+
+    # Initialize DB on startup
+    async def post_init(application: Application) -> None:
+        await db.init_db()
+        logger.info("Database initialized")
+
+    app.post_init = post_init
+
+    logger.info("Bot starting...")
+    app.run_polling(
+        allowed_updates=[
+            "message",
+            "edited_message",
+            "business_connection",
+            "business_message",
+            "edited_business_message",
+            "deleted_business_messages",
+        ]
+    )
+
+
+if __name__ == "__main__":
+    main()
