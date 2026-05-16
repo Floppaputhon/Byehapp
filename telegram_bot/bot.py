@@ -50,7 +50,7 @@ def main() -> None:
     # Command handlers (direct messages to the bot)
     app.add_handler(CommandHandler("start", handlers.cmd_start))
     app.add_handler(CommandHandler("help", handlers.cmd_help))
-    app.add_handler(CommandHandler(["deleted", "udалённые"], handlers.cmd_deleted))
+    app.add_handler(CommandHandler(["deleted", "удалённые"], handlers.cmd_deleted))
     app.add_handler(CommandHandler(["summary", "итоги"], handlers.cmd_summary))
     app.add_handler(CommandHandler(["remind", "напомни"], handlers.cmd_remind))
     app.add_handler(CommandHandler(["pending", "ответить"], handlers.cmd_pending))

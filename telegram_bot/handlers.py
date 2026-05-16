@@ -32,6 +32,17 @@ def _get_media_info(message) -> tuple[str | None, str | None]:
     return None, None
 
 
+MAX_TG_MSG_LEN = 4096
+
+
+async def _safe_reply(message, text: str, **kwargs) -> None:
+    """Send text, splitting into chunks if it exceeds Telegram's limit."""
+    while text:
+        chunk = text[:MAX_TG_MSG_LEN]
+        text = text[MAX_TG_MSG_LEN:]
+        await message.reply_text(chunk, **kwargs)
+
+
 MEDIA_LABELS = {
     "photo": "фото",
     "video": "видео",
@@ -233,7 +244,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/help — справка\n\n"
         "Подключи меня как бизнес-бота в настройках Telegram!"
     )
-    await update.message.reply_text(text, parse_mode="HTML")
+    await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -257,7 +268,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  <i>Ответь на сообщение этой командой</i>\n\n"
         "/myreminders — список активных напоминаний\n"
     )
-    await update.message.reply_text(text, parse_mode="HTML")
+    await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_deleted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -294,7 +305,7 @@ async def cmd_deleted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             text += f"{media}\n"
         text += "\n"
 
-    await update.message.reply_text(text, parse_mode="HTML")
+    await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -315,7 +326,7 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     summary = await ai_client.summarize_messages(messages)
     text = f"<b>Пересказ за {hours} ч.</b>\n\n{summary}"
-    await update.message.reply_text(text, parse_mode="HTML")
+    await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -400,7 +411,7 @@ async def cmd_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             text += f"{content}\n"
         text += "\n"
 
-    await update.message.reply_text(text, parse_mode="HTML")
+    await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -428,7 +439,7 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"   Удалено: {s['deleted_count']}\n\n"
         )
 
-    await update.message.reply_text(text, parse_mode="HTML")
+    await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -453,7 +464,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         text += f"<b>{name}</b> | {date_str}{deleted_mark}\n"
         text += f"{content[:150]}\n\n"
 
-    await update.message.reply_text(text, parse_mode="HTML")
+    await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -476,8 +487,8 @@ async def cmd_translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await update.message.reply_text("Перевожу...")
     translation = await ai_client.translate_text(text_to_translate)
-    await update.message.reply_text(
-        f"<b>Перевод:</b>\n\n{translation}", parse_mode="HTML"
+    await _safe_reply(
+        update.message, f"<b>Перевод:</b>\n\n{translation}", parse_mode="HTML"
     )
 
 
@@ -501,8 +512,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     await update.message.reply_text("Анализирую...")
     analysis = await ai_client.analyze_message(text_to_analyze)
-    await update.message.reply_text(
-        f"<b>Анализ:</b>\n\n{analysis}", parse_mode="HTML"
+    await _safe_reply(
+        update.message, f"<b>Анализ:</b>\n\n{analysis}", parse_mode="HTML"
     )
 
 
@@ -521,7 +532,7 @@ async def cmd_myreminders(
         time_str = (r.get("remind_at") or "")[:16].replace("T", " ")
         text += f"{time_str}{target}\n{r['reminder_text']}\n\n"
 
-    await update.message.reply_text(text, parse_mode="HTML")
+    await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 # ── Periodic jobs ────────────────────────────────────────────────────
