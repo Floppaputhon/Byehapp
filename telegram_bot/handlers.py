@@ -2087,7 +2087,7 @@ async def handle_group_question(
 
     status_msg = await msg.reply_text("Думаю...")
 
-    response = await ai_client.ai_chat(user_text, history=history)
+    response = await ai_client.answer_question(user_text, history=history)
     _add_to_history(chat_id, "assistant", response)
 
     await status_msg.edit_text(response)
