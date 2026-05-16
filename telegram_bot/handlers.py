@@ -2,6 +2,7 @@
 
 import datetime
 import re
+from collections import deque
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -9,6 +10,19 @@ from telegram.ext import ContextTypes
 import database as db
 import ai_client
 from config import OWNER_ID
+
+_chat_history: dict[int, deque] = {}
+_MAX_HISTORY = 20
+
+
+def _get_history(chat_id: int) -> list[dict]:
+    return list(_chat_history.get(chat_id, []))
+
+
+def _add_to_history(chat_id: int, role: str, text: str) -> None:
+    if chat_id not in _chat_history:
+        _chat_history[chat_id] = deque(maxlen=_MAX_HISTORY)
+    _chat_history[chat_id].append({"role": role, "content": text})
 
 
 def _get_media_info(message) -> tuple[str | None, str | None]:
@@ -555,20 +569,25 @@ async def handle_direct_question(
     if msg.text.startswith("/"):
         return
 
+    chat_id = msg.chat.id
+    _add_to_history(chat_id, "user", msg.text)
+
     intent = ai_client.classify_intent(msg.text)
 
     if intent == "DIALOG_READ":
-        await _handle_dialog_read(msg)
+        await _handle_dialog_read(msg, chat_id)
     elif intent == "MESSAGE_SEND":
-        await _handle_message_send(msg, context)
+        await _handle_message_send(msg, context, chat_id)
     elif intent == "SCHEDULE_MESSAGE":
         await _handle_schedule_message(msg, update)
     else:
-        answer = await ai_client.answer_question(msg.text)
+        history = _get_history(chat_id)
+        answer = await ai_client.answer_question(msg.text, history=history[:-1])
+        _add_to_history(chat_id, "assistant", answer)
         await _safe_reply(msg, answer)
 
 
-async def _handle_dialog_read(msg) -> None:
+async def _handle_dialog_read(msg, chat_id: int) -> None:
     status_msg = await msg.reply_text(
         "Сейчас отвечу на вопрос\n"
         "Tools:\n  Dialog_read"
@@ -590,6 +609,7 @@ async def _handle_dialog_read(msg) -> None:
     )
 
     answer = await ai_client.answer_with_dialog(msg.text, messages)
+    _add_to_history(chat_id, "assistant", answer)
     await status_msg.edit_text(
         "Сейчас отвечу на вопрос\n"
         f"Tools:\n  Dialog_read — прочитано {len(messages)} сообщений ✓\n"
@@ -598,7 +618,14 @@ async def _handle_dialog_read(msg) -> None:
     await _safe_reply(msg, answer)
 
 
-async def _handle_message_send(msg, context: ContextTypes.DEFAULT_TYPE) -> None:
+def _extract_username(text: str) -> str | None:
+    m = re.search(r"@(\w+)", text)
+    return m.group(1) if m else None
+
+
+async def _handle_message_send(
+    msg, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+) -> None:
     status_msg = await msg.reply_text(
         "Отправляю сообщение\n"
         "Tools:\n  Compose_message"
@@ -612,51 +639,59 @@ async def _handle_message_send(msg, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  Chat_lookup"
     )
 
-    chats = await db.get_known_chats()
+    target_username = _extract_username(msg.text)
+    target_chat = None
+    if target_username:
+        target_chat = await db.find_chat_by_username(target_username)
 
-    if not chats:
-        await status_msg.edit_text(
-            "Отправляю сообщение\n"
-            "Tools:\n  Compose_message ✓\n"
-            "  Chat_lookup — нет доступных чатов\n\n"
-            "Нет чатов с бизнес-подключением. "
-            "Сначала подключи бота как бизнес-бота в настройках Telegram."
-        )
-        return
+    if not target_chat:
+        chats = await db.get_known_chats()
+        if chats:
+            target_chat = chats[0]
 
-    target_chat = chats[0]
-    bc = await db.get_business_connection_for_chat(target_chat["chat_id"])
+    bc = None
+    if target_chat:
+        bc = await db.get_business_connection_for_chat(target_chat["chat_id"])
+    if not bc:
+        bc = await db.get_any_business_connection()
 
     if not bc:
+        _add_to_history(chat_id, "assistant", f"Нет бизнес-подключения. Текст: {composed}")
         await status_msg.edit_text(
             "Отправляю сообщение\n"
             "Tools:\n  Compose_message ✓\n"
-            "  Chat_lookup ✓\n"
-            "  Message_send — нет бизнес-подключения для ответа\n\n"
-            f"Текст сообщения:\n{composed}\n\n"
-            "Не удалось отправить: нет активного бизнес-подключения с правом ответа."
+            "  Chat_lookup — нет бизнес-подключения\n\n"
+            "Подключи бота как бизнес-бота в настройках Telegram."
         )
         return
+
+    send_chat_id = target_chat["chat_id"] if target_chat else bc["user_chat_id"]
+    chat_name = (
+        (target_chat.get("first_name") or f"@{target_username}")
+        if target_chat
+        else f"chat {send_chat_id}"
+    )
 
     try:
         await context.bot.send_message(
-            chat_id=target_chat["chat_id"],
+            chat_id=send_chat_id,
             text=composed,
             business_connection_id=bc["connection_id"],
         )
-        chat_name = target_chat.get("first_name") or str(target_chat["chat_id"])
+        _add_to_history(chat_id, "assistant", f"Отправлено {chat_name}: {composed}")
         await status_msg.edit_text(
             "Отправляю сообщение\n"
             "Tools:\n  Compose_message ✓\n"
-            "  Chat_lookup ✓\n"
-            f"  Message_send → {chat_name} ✓\n\n"
+            f"  Chat_lookup → {chat_name} ✓\n"
+            f"  Message_send ✓\n\n"
             f"Отправлено: {composed}"
         )
     except Exception as e:
+        _add_to_history(chat_id, "assistant", f"Ошибка отправки: {e}")
         await status_msg.edit_text(
             "Отправляю сообщение\n"
             "Tools:\n  Compose_message ✓\n"
-            "  Chat_lookup ✓\n"
+            f"  Chat_lookup → {chat_name} ✓\n"
             f"  Message_send — ошибка: {e}\n\n"
             f"Текст: {composed}"
         )

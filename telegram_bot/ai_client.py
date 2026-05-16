@@ -8,18 +8,22 @@ from config import AI_API_KEY, AI_API_URL, AI_MODEL
 
 
 async def ai_chat(
-    system_prompt: str, user_message: str, max_tokens: int = 1000
+    system_prompt: str,
+    user_message: str,
+    max_tokens: int = 1000,
+    history: list[dict] | None = None,
 ) -> str:
     headers = {
         "Authorization": f"Bearer {AI_API_KEY}",
         "Content-Type": "application/json",
     }
+    messages = [{"role": "system", "content": system_prompt}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
     payload = {
         "model": AI_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
+        "messages": messages,
         "max_tokens": max_tokens,
         "temperature": 0.7,
     }
@@ -105,8 +109,8 @@ _SCHEDULE_PATTERNS = _re.compile(
 )
 
 _SEND_PATTERNS = _re.compile(
-    r"(?:^(?:напиши|отправь|пошли|скажи|написать|отправить)\s+\S|"
-    r"(?:напиши|отправь|пошли)\s+(?:ему|ей|им|туда|в\s+чат))",
+    r"(?:^(?:напиши|пиши|отправь|пошли|скажи|написать|отправить)\s+\S|"
+    r"(?:напиши|пиши|отправь|пошли)\s+.*?(?:ему|ей|им|туда|в\s+чат|@\w))",
     _re.IGNORECASE,
 )
 
@@ -122,16 +126,18 @@ def classify_intent(message: str) -> str:
     return "GENERAL"
 
 
-async def answer_question(question: str, context: str = "") -> str:
+async def answer_question(
+    question: str,
+    history: list[dict] | None = None,
+) -> str:
     system_prompt = (
-        "Ты — умный AI-ассистент в Telegram. Отвечай на вопросы пользователя "
-        "точно, полезно и кратко. Отвечай на том языке, на котором задан вопрос. "
+        "Ты — умный AI-ассистент в Telegram по имени gemeni. "
+        "Ты помнишь весь диалог с пользователем. "
+        "Отвечай на вопросы точно, полезно и кратко. "
+        "Отвечай на том языке, на котором задан вопрос. "
         "Если вопрос на русском — отвечай на русском."
     )
-    user_msg = question
-    if context:
-        user_msg = f"Контекст диалога:\n{context}\n\nВопрос: {question}"
-    return await ai_chat(system_prompt, user_msg, max_tokens=1500)
+    return await ai_chat(system_prompt, question, max_tokens=1500, history=history)
 
 
 async def answer_with_dialog(question: str, messages: list[dict]) -> str:

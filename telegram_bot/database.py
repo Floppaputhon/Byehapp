@@ -348,6 +348,32 @@ async def get_known_chats() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+async def find_chat_by_username(username: str) -> dict | None:
+    clean = username.lstrip("@")
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT chat_id, first_name, username "
+            "FROM messages WHERE username = ? COLLATE NOCASE "
+            "ORDER BY date DESC LIMIT 1",
+            (clean,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_any_business_connection() -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM business_connections "
+            "WHERE can_reply = 1 AND is_enabled = 1 "
+            "ORDER BY date DESC LIMIT 1"
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
 async def save_business_connection(
     connection_id: str,
     user_id: int,
