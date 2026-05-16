@@ -17,6 +17,7 @@ _chat_history: dict[int, deque] = {}
 _MAX_HISTORY = 20
 _autoreply_sent: set[int] = set()
 _authenticated_users: set[int] = set()
+_flood_tracker: dict[int, dict[int, list]] = {}
 
 GROUP_ACCESS_OWNER = "owner"
 GROUP_ACCESS_ADMINS = "admins"
@@ -345,6 +346,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/contact — инфо о контакте\n"
         "/export — экспорт истории чата\n"
         "/qr — быстрые ответы (шаблоны)\n"
+        "/chats — список приватных чатов\n"
+        "/groups — список групп\n"
         "/access — настройка доступа в группах\n"
         "/whoami — твой ID и инфо\n"
         "/help — справка\n\n"
@@ -353,6 +356,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/groupsummary [часы] — AI-пересказ группы\n"
         "/top — топ участников группы\n"
         "/groupsearch [запрос] — поиск в группе\n\n"
+        "<b>Модерация:</b>\n"
+        "/moder on|off — вкл/выкл модерацию\n"
+        "/rules — правила группы\n"
+        "/warn — предупредить (3 = кик)\n"
+        "/mute [мин] — замутить\n"
+        "/unmute — размутить\n"
+        "/kick — кикнуть\n"
+        "/ban — забанить\n"
+        "/unban — разбанить\n"
+        "/pin — закрепить\n"
+        "/unpin — открепить\n"
+        "/poll — голосование\n"
+        "/report — жалоба админам\n\n"
         "Также можешь просто писать мне — я пойму!\n"
         "Отправь фото — я опишу что на нём.\n"
         "В группе — упомяни меня или ответь на моё сообщение.\n"
@@ -386,6 +402,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/contact @username — инфо о контакте\n"
         "/export [@username] — экспорт чата\n"
         "/qr save/list/use — шаблоны ответов\n"
+        "/chats — список приватных чатов (ЛС)\n"
+        "/groups — список групп бота\n"
         "/access [owner/admins/all] — доступ в группах\n"
         "/whoami — твой Telegram ID\n\n"
         "<b>Группы:</b>\n\n"
@@ -394,6 +412,23 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/top — топ участников группы\n"
         "/groupsearch [запрос] — поиск по группе\n"
         "Упомяни меня @bot или ответь — отвечу на вопрос\n\n"
+        "<b>Модерация:</b>\n\n"
+        "/moder on — включить модерацию (работать)\n"
+        "/moder off — выключить (в сон)\n"
+        "/moder welcome [текст] — приветствие ({name} = имя)\n"
+        "/moder badwords [слова,через,запятую] — фильтр мата\n"
+        "/moder antiflood [макс] [сек] — антифлуд\n"
+        "/rules [текст] — правила группы\n"
+        "/warn — предупредить (3 = кик)\n"
+        "/mute [минуты] — замутить\n"
+        "/unmute — размутить\n"
+        "/kick [причина] — кикнуть\n"
+        "/ban [причина] — забанить\n"
+        "/unban — разбанить\n"
+        "/pin — закрепить сообщение\n"
+        "/unpin — открепить\n"
+        "/poll Вопрос | вариант1 | вариант2 — голосование\n"
+        "/report — пожаловаться на сообщение\n\n"
         "<b>Фото:</b> отправь фото — я опишу что на нём\n\n"
         "<b>Текстом:</b>\n"
         "• \"Срочно!\" → приоритет чатов\n"
@@ -1880,6 +1915,10 @@ async def handle_group_message(
     if not msg:
         return
 
+    blocked = await _check_moderation(update, context)
+    if blocked:
+        return
+
     user = msg.from_user
     media_type, file_id = _get_media_info(msg)
 
@@ -2231,6 +2270,636 @@ async def cmd_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text(
             "Используй: /access owner | admins | all"
         )
+
+
+# ── /chats and /groups commands ───────────────────────────────────────
+
+
+async def cmd_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all known private chats the bot can send to."""
+    if not await _check_auth(update):
+        return
+    chats = await db.get_known_chats()
+    bc_chats = await db.get_all_business_chats()
+    all_ids = {c["chat_id"] for c in chats}
+    for c in bc_chats:
+        if c["user_chat_id"] and c["user_chat_id"] not in all_ids:
+            chats.append({"chat_id": c["user_chat_id"], "first_name": str(c.get("user_id", "")), "username": None, "user_id": c.get("user_id")})
+
+    if not chats:
+        await update.message.reply_text("Нет известных приватных чатов.")
+        return
+
+    text = "<b>Приватные чаты (ЛС):</b>\n\n"
+    for i, c in enumerate(chats[:30], 1):
+        name = c.get("first_name") or "Неизвестный"
+        username = f" @{c['username']}" if c.get("username") else ""
+        uid = c.get("user_id") or c.get("chat_id") or ""
+        text += f"{i}. <b>{name}</b>{username}\n"
+        text += f"   🆔 <code>{uid}</code>\n"
+    text += f"\nВсего: {len(chats)}"
+    await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+async def cmd_groups(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all known groups the bot is in."""
+    if not await _check_auth(update):
+        return
+    groups = await db.get_known_group_chats()
+    if not groups:
+        await update.message.reply_text(
+            "Нет известных групп.\n"
+            "Добавь бота в группу и напиши там хотя бы одно сообщение."
+        )
+        return
+
+    text = "<b>Группы:</b>\n\n"
+    for i, g in enumerate(groups, 1):
+        name = g.get("first_name") or "Группа"
+        gid = g.get("chat_id") or ""
+        text += f"{i}. <b>{name}</b>\n"
+        text += f"   🆔 <code>{gid}</code>\n"
+    text += f"\nВсего: {len(groups)}"
+    await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+# ── Moderation ───────────────────────────────────────────────────────
+
+
+async def cmd_moder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle moderation mode for a group."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user:
+        return
+    if chat.type == "private":
+        await update.message.reply_text("Модерация работает только в группах.")
+        return
+    if user.id != OWNER_ID:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("Только админы могут управлять модерацией.")
+                return
+        except Exception:
+            return
+
+    if not context.args:
+        mod = await db.get_moderation(chat.id)
+        status = "включена" if (mod and mod["is_enabled"]) else "выключена"
+        await update.message.reply_text(
+            f"<b>Модерация:</b> {status}\n\n"
+            f"/moder on — включить (работать)\n"
+            f"/moder off — выключить (в сон)\n"
+            f"/moder welcome [текст] — приветствие новых\n"
+            f"/moder badwords [слова через запятую] — фильтр мата\n"
+            f"/moder antiflood [макс] [сек] — антифлуд\n",
+            parse_mode="HTML",
+        )
+        return
+
+    action = context.args[0].lower()
+
+    if action in ("on", "работай", "вкл"):
+        await db.set_moderation(chat.id, is_enabled=1)
+        await update.message.reply_text("Модерация включена.")
+    elif action in ("off", "сон", "выкл"):
+        await db.set_moderation(chat.id, is_enabled=0)
+        await update.message.reply_text("Модерация выключена (в сон).")
+    elif action == "welcome":
+        text = " ".join(context.args[1:]) if len(context.args) > 1 else ""
+        await db.set_moderation(chat.id, welcome_msg=text)
+        if text:
+            await update.message.reply_text(f"Приветствие установлено: {text}")
+        else:
+            await update.message.reply_text("Приветствие сброшено.")
+    elif action == "badwords":
+        words = " ".join(context.args[1:]) if len(context.args) > 1 else ""
+        await db.set_moderation(chat.id, bad_words=words)
+        if words:
+            await update.message.reply_text(f"Запрещённые слова: {words}")
+        else:
+            await update.message.reply_text("Список запрещённых слов очищен.")
+    elif action == "antiflood":
+        max_msgs = 5
+        seconds = 10
+        if len(context.args) > 1:
+            try:
+                max_msgs = int(context.args[1])
+            except ValueError:
+                pass
+        if len(context.args) > 2:
+            try:
+                seconds = int(context.args[2])
+            except ValueError:
+                pass
+        await db.set_moderation(chat.id, antiflood_max=max_msgs, antiflood_seconds=seconds)
+        await update.message.reply_text(f"Антифлуд: макс {max_msgs} сообщений за {seconds} сек.")
+    else:
+        await update.message.reply_text("Используй: /moder on | off | welcome | badwords | antiflood")
+
+
+async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """View or set group rules."""
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+
+    if context.args:
+        user = update.effective_user
+        if not user or user.id != OWNER_ID:
+            try:
+                member = await chat.get_member(user.id)
+                if member.status not in ("administrator", "creator"):
+                    await update.message.reply_text("Только админы могут менять правила.")
+                    return
+            except Exception:
+                return
+        rules_text = " ".join(context.args)
+        await db.set_moderation(chat.id, rules=rules_text)
+        await update.message.reply_text("Правила обновлены!")
+        return
+
+    mod = await db.get_moderation(chat.id)
+    rules = mod.get("rules") if mod else ""
+    if rules:
+        await _safe_reply(update.message, f"<b>Правила группы:</b>\n\n{rules}", parse_mode="HTML")
+    else:
+        await update.message.reply_text(
+            "Правила не установлены.\n"
+            "Используй: /rules [текст правил]"
+        )
+
+
+async def cmd_warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Warn a user in the group. 3 warnings = kick."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or user.id != OWNER_ID:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("Только админы могут выдавать предупреждения.")
+                return
+        except Exception:
+            return
+
+    reply = update.message.reply_to_message
+    if not reply or not reply.from_user:
+        await update.message.reply_text("Ответь на сообщение пользователя, которого хочешь предупредить.")
+        return
+
+    target = reply.from_user
+    reason = " ".join(context.args) if context.args else "Нет причины"
+    count = await db.add_warning(chat.id, target.id, reason, user.id)
+
+    name = target.first_name or "Пользователь"
+    text = (
+        f"⚠️ <b>{name}</b> получил предупреждение ({count}/3)\n"
+        f"Причина: {reason}"
+    )
+
+    if count >= 3:
+        try:
+            await chat.ban_member(target.id)
+            await chat.unban_member(target.id)
+            await db.clear_warnings(chat.id, target.id)
+            text += f"\n\n🚫 {name} кикнут за 3 предупреждения!"
+        except Exception as e:
+            text += f"\n\nНе удалось кикнуть: {e}"
+
+    await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mute a user in the group."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or user.id != OWNER_ID:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("Только админы могут мутить.")
+                return
+        except Exception:
+            return
+
+    reply = update.message.reply_to_message
+    if not reply or not reply.from_user:
+        await update.message.reply_text("Ответь на сообщение пользователя для мута.")
+        return
+
+    target = reply.from_user
+    minutes = 15
+    if context.args:
+        try:
+            minutes = int(context.args[0])
+        except ValueError:
+            pass
+
+    from telegram import ChatPermissions
+    until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
+    try:
+        await chat.restrict_member(
+            target.id,
+            ChatPermissions(can_send_messages=False),
+            until_date=until,
+        )
+        name = target.first_name or "Пользователь"
+        await update.message.reply_text(
+            f"🔇 <b>{name}</b> замьючен на {minutes} мин.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Unmute a user in the group."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or user.id != OWNER_ID:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("Только админы могут размьютить.")
+                return
+        except Exception:
+            return
+
+    reply = update.message.reply_to_message
+    if not reply or not reply.from_user:
+        await update.message.reply_text("Ответь на сообщение пользователя для размута.")
+        return
+
+    target = reply.from_user
+    from telegram import ChatPermissions
+    try:
+        await chat.restrict_member(
+            target.id,
+            ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+            ),
+        )
+        name = target.first_name or "Пользователь"
+        await update.message.reply_text(
+            f"🔊 <b>{name}</b> размьючен.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_kick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kick a user from the group."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or user.id != OWNER_ID:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("Только админы могут кикать.")
+                return
+        except Exception:
+            return
+
+    reply = update.message.reply_to_message
+    if not reply or not reply.from_user:
+        await update.message.reply_text("Ответь на сообщение пользователя для кика.")
+        return
+
+    target = reply.from_user
+    try:
+        await chat.ban_member(target.id)
+        await chat.unban_member(target.id)
+        name = target.first_name or "Пользователь"
+        reason = " ".join(context.args) if context.args else ""
+        text = f"🚫 <b>{name}</b> кикнут из группы."
+        if reason:
+            text += f"\nПричина: {reason}"
+        await _safe_reply(update.message, text, parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Ban a user from the group."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or user.id != OWNER_ID:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("Только админы могут банить.")
+                return
+        except Exception:
+            return
+
+    reply = update.message.reply_to_message
+    if not reply or not reply.from_user:
+        await update.message.reply_text("Ответь на сообщение пользователя для бана.")
+        return
+
+    target = reply.from_user
+    try:
+        await chat.ban_member(target.id)
+        name = target.first_name or "Пользователь"
+        reason = " ".join(context.args) if context.args else ""
+        text = f"⛔ <b>{name}</b> забанен."
+        if reason:
+            text += f"\nПричина: {reason}"
+        await _safe_reply(update.message, text, parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Unban a user."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or user.id != OWNER_ID:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("Только админы могут разбанивать.")
+                return
+        except Exception:
+            return
+
+    reply = update.message.reply_to_message
+    if not reply or not reply.from_user:
+        await update.message.reply_text("Ответь на сообщение пользователя.")
+        return
+
+    target = reply.from_user
+    try:
+        await chat.unban_member(target.id)
+        name = target.first_name or "Пользователь"
+        await update.message.reply_text(
+            f"✅ <b>{name}</b> разбанен.",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_pin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pin a message in the group."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or user.id != OWNER_ID:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("Только админы могут закреплять.")
+                return
+        except Exception:
+            return
+
+    reply = update.message.reply_to_message
+    if not reply:
+        await update.message.reply_text("Ответь на сообщение, которое нужно закрепить.")
+        return
+
+    try:
+        await reply.pin()
+        await update.message.reply_text("📌 Сообщение закреплено!")
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_unpin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Unpin a message in the group."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or user.id != OWNER_ID:
+        try:
+            member = await chat.get_member(user.id)
+            if member.status not in ("administrator", "creator"):
+                await update.message.reply_text("Только админы могут откреплять.")
+                return
+        except Exception:
+            return
+
+    reply = update.message.reply_to_message
+    if reply:
+        try:
+            await reply.unpin()
+            await update.message.reply_text("Сообщение откреплено.")
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка: {e}")
+    else:
+        try:
+            await chat.unpin_all_messages()
+            await update.message.reply_text("Все сообщения откреплены.")
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_poll(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Create a poll. Usage: /poll Вопрос | вариант1 | вариант2 | ..."""
+    if not await _check_group_access(update):
+        return
+    chat = update.effective_chat
+    if not chat:
+        return
+
+    raw = " ".join(context.args) if context.args else ""
+    if "|" not in raw:
+        await update.message.reply_text(
+            "Использование: /poll Вопрос | вариант1 | вариант2 | ...\n"
+            "Минимум 2 варианта ответа."
+        )
+        return
+
+    parts = [p.strip() for p in raw.split("|")]
+    question = parts[0]
+    options = [o for o in parts[1:] if o]
+
+    if len(options) < 2:
+        await update.message.reply_text("Нужно минимум 2 варианта ответа.")
+        return
+    if len(options) > 10:
+        options = options[:10]
+
+    try:
+        await context.bot.send_poll(
+            chat_id=chat.id,
+            question=question,
+            options=options,
+            is_anonymous=False,
+        )
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Report a message to admins."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+
+    reply = update.message.reply_to_message
+    if not reply:
+        await update.message.reply_text("Ответь на сообщение, которое хочешь пожаловаться.")
+        return
+
+    reporter = user.first_name if user else "Аноним"
+    reported = reply.from_user
+    reported_name = reported.first_name if reported else "Неизвестный"
+    content = reply.text or reply.caption or "[медиа]"
+
+    try:
+        await context.bot.send_message(
+            chat_id=OWNER_ID,
+            text=(
+                f"🚨 <b>Жалоба в {chat.title or 'группе'}</b>\n\n"
+                f"От: {reporter}\n"
+                f"На: {reported_name}\n"
+                f"Сообщение: {content[:300]}\n"
+                f"Группа ID: <code>{chat.id}</code>"
+            ),
+            parse_mode="HTML",
+        )
+        await update.message.reply_text("Жалоба отправлена админам.")
+    except Exception:
+        await update.message.reply_text("Не удалось отправить жалобу.")
+
+
+async def handle_new_member(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Welcome new members if moderation is enabled."""
+    msg = update.message
+    if not msg or not msg.new_chat_members:
+        return
+
+    chat = update.effective_chat
+    if not chat:
+        return
+
+    mod = await db.get_moderation(chat.id)
+    if not mod or not mod.get("is_enabled"):
+        return
+
+    welcome = mod.get("welcome_msg", "")
+    if not welcome:
+        return
+
+    for member in msg.new_chat_members:
+        if member.is_bot:
+            continue
+        name = member.first_name or "Новый участник"
+        personal_welcome = welcome.replace("{name}", name)
+        try:
+            await msg.reply_text(personal_welcome)
+        except Exception:
+            pass
+
+
+async def _check_moderation(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> bool:
+    """Check moderation rules (bad words, antiflood). Returns True if message was blocked."""
+    msg = update.message
+    if not msg:
+        return False
+
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or not user or chat.type == "private":
+        return False
+
+    if user.id == OWNER_ID:
+        return False
+    try:
+        member = await chat.get_member(user.id)
+        if member.status in ("administrator", "creator"):
+            return False
+    except Exception:
+        pass
+
+    mod = await db.get_moderation(chat.id)
+    if not mod or not mod.get("is_enabled"):
+        return False
+
+    text_lower = (msg.text or "").lower()
+
+    bad_words = mod.get("bad_words", "")
+    if bad_words and text_lower:
+        words = [w.strip().lower() for w in bad_words.split(",") if w.strip()]
+        for w in words:
+            if w in text_lower:
+                try:
+                    await msg.delete()
+                    await context.bot.send_message(
+                        chat_id=chat.id,
+                        text=f"⚠️ {user.first_name}, запрещённое слово удалено.",
+                    )
+                except Exception:
+                    pass
+                return True
+
+    max_msgs = mod.get("antiflood_max", 5)
+    seconds = mod.get("antiflood_seconds", 10)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(seconds=seconds)
+
+    if chat.id not in _flood_tracker:
+        _flood_tracker[chat.id] = {}
+    user_times = _flood_tracker[chat.id].setdefault(user.id, [])
+    user_times.append(now)
+    user_times[:] = [t for t in user_times if t > cutoff]
+
+    if len(user_times) > max_msgs:
+        from telegram import ChatPermissions
+        try:
+            until = now + datetime.timedelta(minutes=5)
+            await chat.restrict_member(
+                user.id,
+                ChatPermissions(can_send_messages=False),
+                until_date=until,
+            )
+            await context.bot.send_message(
+                chat_id=chat.id,
+                text=f"🔇 {user.first_name} замьючен на 5 мин (антифлуд).",
+            )
+        except Exception:
+            pass
+        _flood_tracker[chat.id][user.id] = []
+        return True
+
+    return False
 
 
 # ── Periodic jobs ────────────────────────────────────────────────────

@@ -94,12 +94,32 @@ async def init_db() -> None:
                 UNIQUE(owner_id, name)
             );
 
+            CREATE TABLE IF NOT EXISTS moderation (
+                chat_id INTEGER PRIMARY KEY,
+                is_enabled INTEGER DEFAULT 0,
+                welcome_msg TEXT DEFAULT '',
+                rules TEXT DEFAULT '',
+                antiflood_max INTEGER DEFAULT 5,
+                antiflood_seconds INTEGER DEFAULT 10,
+                bad_words TEXT DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS warnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                reason TEXT,
+                warned_by INTEGER,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
             CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(is_deleted);
             CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders(remind_at);
             CREATE INDEX IF NOT EXISTS idx_pending ON pending_replies(is_answered);
             CREATE INDEX IF NOT EXISTS idx_scheduled ON scheduled_messages(send_at);
             CREATE INDEX IF NOT EXISTS idx_notes_owner ON notes(owner_id);
+            CREATE INDEX IF NOT EXISTS idx_warnings_chat ON warnings(chat_id, user_id);
         """)
         await db.commit()
 
@@ -726,3 +746,72 @@ async def search_group_messages(
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+
+# ── Moderation ───────────────────────────────────────────────────────
+
+
+async def get_moderation(chat_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM moderation WHERE chat_id = ?", (chat_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def set_moderation(chat_id: int, **kwargs) -> None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        existing = await get_moderation(chat_id)
+        if not existing:
+            await conn.execute(
+                "INSERT INTO moderation (chat_id) VALUES (?)", (chat_id,)
+            )
+        for key, value in kwargs.items():
+            if key in ("is_enabled", "welcome_msg", "rules",
+                       "antiflood_max", "antiflood_seconds", "bad_words"):
+                await conn.execute(
+                    f"UPDATE moderation SET {key} = ? WHERE chat_id = ?",
+                    (value, chat_id),
+                )
+        await conn.commit()
+
+
+async def add_warning(
+    chat_id: int, user_id: int, reason: str | None, warned_by: int | None
+) -> int:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "INSERT INTO warnings (chat_id, user_id, reason, warned_by) "
+            "VALUES (?, ?, ?, ?)",
+            (chat_id, user_id, reason, warned_by),
+        )
+        await conn.commit()
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM warnings WHERE chat_id = ? AND user_id = ?",
+            (chat_id, user_id),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+
+async def get_warnings(chat_id: int, user_id: int) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM warnings WHERE chat_id = ? AND user_id = ? "
+            "ORDER BY created_at DESC",
+            (chat_id, user_id),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def clear_warnings(chat_id: int, user_id: int) -> None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "DELETE FROM warnings WHERE chat_id = ? AND user_id = ?",
+            (chat_id, user_id),
+        )
+        await conn.commit()

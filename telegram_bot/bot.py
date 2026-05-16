@@ -81,6 +81,22 @@ def main() -> None:
     app.add_handler(CommandHandler("priority", handlers.cmd_priority))
     app.add_handler(CommandHandler("whoami", handlers.cmd_whoami))
     app.add_handler(CommandHandler("access", handlers.cmd_access))
+    app.add_handler(CommandHandler("chats", handlers.cmd_chats))
+    app.add_handler(CommandHandler("groups", handlers.cmd_groups))
+
+    # Moderation commands
+    app.add_handler(CommandHandler("moder", handlers.cmd_moder))
+    app.add_handler(CommandHandler("rules", handlers.cmd_rules))
+    app.add_handler(CommandHandler("warn", handlers.cmd_warn))
+    app.add_handler(CommandHandler("mute", handlers.cmd_mute))
+    app.add_handler(CommandHandler("unmute", handlers.cmd_unmute))
+    app.add_handler(CommandHandler("kick", handlers.cmd_kick))
+    app.add_handler(CommandHandler("ban", handlers.cmd_ban))
+    app.add_handler(CommandHandler("unban", handlers.cmd_unban))
+    app.add_handler(CommandHandler("pin", handlers.cmd_pin))
+    app.add_handler(CommandHandler("unpin", handlers.cmd_unpin))
+    app.add_handler(CommandHandler("poll", handlers.cmd_poll))
+    app.add_handler(CommandHandler("report", handlers.cmd_report))
 
     # Group-specific commands
     app.add_handler(CommandHandler("groupstats", handlers.cmd_groupstats))
@@ -110,6 +126,14 @@ def main() -> None:
             filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
             handlers.handle_direct_question,
         )
+    )
+
+    # New member welcome handler
+    app.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.NEW_CHAT_MEMBERS,
+            handlers.handle_new_member,
+        ),
     )
 
     # Group message tracking + AI Q&A (mention/reply to bot)
