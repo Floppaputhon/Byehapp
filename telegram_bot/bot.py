@@ -78,6 +78,7 @@ def main() -> None:
     app.add_handler(CommandHandler("contact", handlers.cmd_contact))
     app.add_handler(CommandHandler("export", handlers.cmd_export))
     app.add_handler(CommandHandler("qr", handlers.cmd_qr))
+    app.add_handler(CommandHandler("priority", handlers.cmd_priority))
 
     # Voice message handler
     app.add_handler(

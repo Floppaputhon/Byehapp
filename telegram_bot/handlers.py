@@ -933,6 +933,8 @@ async def handle_direct_question(
         await _handle_export_nl(msg, chat_id)
     elif intent == "SUMMARY":
         await _handle_summary_nl(msg, chat_id)
+    elif intent == "PRIORITY":
+        await _handle_priority_nl(msg, chat_id)
     else:
         history = _get_history(chat_id)
         answer = await ai_client.answer_question(msg.text, history=history[:-1])
@@ -1668,6 +1670,60 @@ async def _handle_summary_nl(msg, chat_id: int) -> None:
     _add_to_history(chat_id, "assistant", summary)
     await status_msg.edit_text(
         f"Пересказ\nTools:\n  Summary_generate ✓\n\n{summary}"
+    )
+
+
+async def _handle_priority_nl(msg, chat_id: int) -> None:
+    status_msg = await msg.reply_text(
+        "Анализирую чаты\nTools:\n  Pending_check\n  Priority_rank"
+    )
+    chats = await db.get_pending_with_context(limit_per_chat=5)
+    if not chats:
+        result = "Нет неотвеченных чатов! Все чисто."
+        _add_to_history(chat_id, "assistant", result)
+        await status_msg.edit_text(
+            f"Анализирую чаты\nTools:\n  Pending_check ✓ → 0 чатов\n\n{result}"
+        )
+        return
+
+    await status_msg.edit_text(
+        f"Анализирую чаты\nTools:\n"
+        f"  Pending_check ✓ → {len(chats)} чатов\n"
+        f"  Priority_rank — анализ..."
+    )
+    ranking = await ai_client.rank_chat_priority(chats)
+    _add_to_history(chat_id, "assistant", ranking)
+    await status_msg.edit_text(
+        f"Анализирую чаты\nTools:\n"
+        f"  Pending_check ✓ → {len(chats)} чатов\n"
+        f"  Priority_rank ✓\n\n{ranking}"
+    )
+
+
+async def cmd_priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show priority-ranked list of chats that need a reply."""
+    msg = update.message
+    status_msg = await msg.reply_text(
+        "Анализирую чаты\nTools:\n  Pending_check\n  Priority_rank"
+    )
+    chats = await db.get_pending_with_context(limit_per_chat=5)
+    if not chats:
+        await status_msg.edit_text(
+            "Анализирую чаты\nTools:\n  Pending_check ✓ → 0 чатов\n\n"
+            "Нет неотвеченных чатов! Все чисто."
+        )
+        return
+
+    await status_msg.edit_text(
+        f"Анализирую чаты\nTools:\n"
+        f"  Pending_check ✓ → {len(chats)} чатов\n"
+        f"  Priority_rank — анализ..."
+    )
+    ranking = await ai_client.rank_chat_priority(chats)
+    await status_msg.edit_text(
+        f"Анализирую чаты\nTools:\n"
+        f"  Pending_check ✓ → {len(chats)} чатов\n"
+        f"  Priority_rank ✓\n\n{ranking}"
     )
 
 

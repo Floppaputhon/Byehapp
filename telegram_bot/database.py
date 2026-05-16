@@ -572,6 +572,33 @@ async def get_all_business_chats() -> list[dict]:
         return [dict(r) for r in rows]
 
 
+async def get_pending_with_context(limit_per_chat: int = 5) -> list[dict]:
+    """Get pending replies grouped by chat with recent message context."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT DISTINCT chat_id, first_name, username, user_id "
+            "FROM pending_replies WHERE is_answered = 0 "
+            "ORDER BY date DESC LIMIT 30"
+        )
+        chats = [dict(r) for r in await cursor.fetchall()]
+
+        result = []
+        for chat in chats:
+            cid = chat["chat_id"]
+            cursor = await conn.execute(
+                "SELECT text, caption, date, first_name "
+                "FROM messages WHERE chat_id = ? "
+                "ORDER BY date DESC LIMIT ?",
+                (cid, limit_per_chat),
+            )
+            msgs = [dict(r) for r in await cursor.fetchall()]
+            msgs.reverse()
+            chat["recent_messages"] = msgs
+            result.append(chat)
+        return result
+
+
 async def export_chat_messages(
     chat_id: int | None = None, limit: int = 500
 ) -> list[dict]:

@@ -197,6 +197,12 @@ _SUMMARY_PATTERNS = _re.compile(
     _re.IGNORECASE,
 )
 
+_PRIORITY_PATTERNS = _re.compile(
+    r"(?:срочн|важност|приоритет|(?:кому|что)\s+(?:первым?|срочн|важн)\s+(?:ответить|написать)|"
+    r"рейтинг\s+(?:чатов|ответов)|топ\s+(?:чатов|ответов)|сортируй\s+чаты)",
+    _re.IGNORECASE,
+)
+
 
 def classify_intent(message: str) -> str:
     text = message.strip()
@@ -228,6 +234,8 @@ def classify_intent(message: str) -> str:
         return "EXPORT"
     if _SUMMARY_PATTERNS.search(text):
         return "SUMMARY"
+    if _PRIORITY_PATTERNS.search(text):
+        return "PRIORITY"
     if _SCHEDULE_PATTERNS.search(text):
         return "SCHEDULE_MESSAGE"
     if _SEND_PATTERNS.search(text):
@@ -350,6 +358,42 @@ async def answer_with_dialog(question: str, messages: list[dict]) -> str:
     )
     user_msg = f"Вопрос: {question}\n\nИстория сообщений:\n{conversation}"
     return await ai_chat(system_prompt, user_msg, max_tokens=1500)
+
+
+async def rank_chat_priority(chats: list[dict]) -> str:
+    """Use AI to rank pending chats by urgency."""
+    if not chats:
+        return "Нет неотвеченных чатов!"
+
+    formatted = []
+    for chat in chats:
+        name = chat.get("first_name") or "Неизвестный"
+        username = f" (@{chat['username']})" if chat.get("username") else ""
+        msgs = chat.get("recent_messages", [])
+        msg_lines = []
+        for m in msgs:
+            text = m.get("text") or m.get("caption") or ""
+            date_str = (m.get("date") or "")[:16].replace("T", " ")
+            sender = m.get("first_name") or "?"
+            if text:
+                msg_lines.append(f"  [{date_str}] {sender}: {text[:120]}")
+        context = "\n".join(msg_lines) if msg_lines else "  (нет контекста)"
+        formatted.append(f"{name}{username}:\n{context}")
+
+    conversations = "\n\n".join(formatted)
+
+    system_prompt = (
+        "Ты — AI-ассистент, который анализирует чаты в Telegram. "
+        "Тебе даны неотвеченные чаты с последними сообщениями. "
+        "Определи приоритет ответа для каждого чата: "
+        "🔴 Срочно — нужен ответ немедленно (вопросы, просьбы, жалобы, дедлайны). "
+        "🟡 Важно — стоит ответить скоро (обсуждения, предложения). "
+        "🟢 Не срочно — можно ответить позже (болтовня, мемы, спам). "
+        "Составь топ-лист от самого срочного к менее срочному. "
+        "Для каждого чата укажи: приоритет, имя, и КОРОТКУЮ причину (1 предложение). "
+        "Формат:\n🔴 Имя — причина\n🟡 Имя — причина\n🟢 Имя — причина"
+    )
+    return await ai_chat(system_prompt, conversations, max_tokens=1500)
 
 
 async def compose_message(request: str) -> str:
