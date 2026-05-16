@@ -797,7 +797,8 @@ async def set_moderation(chat_id: int, **kwargs) -> None:
             )
         for key, value in kwargs.items():
             if key in ("is_enabled", "welcome_msg", "rules",
-                       "antiflood_max", "antiflood_seconds", "bad_words"):
+                       "antiflood_max", "antiflood_seconds", "bad_words",
+                       "warn_limit"):
                 await conn.execute(
                     f"UPDATE moderation SET {key} = ? WHERE chat_id = ?",
                     (value, chat_id),

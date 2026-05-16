@@ -1756,7 +1756,7 @@ async def _handle_stats_nl(msg, chat_id: int) -> None:
         lines = ["Статистика за 24ч:"]
         for s in stats:
             name = s.get("first_name") or "Неизвестный"
-            lines.append(f"  {name}: {s['count']} сообщений")
+            lines.append(f"  {name}: {s['msg_count']} сообщений")
         result = "\n".join(lines)
     _add_to_history(chat_id, "assistant", result)
     await status_msg.edit_text(
@@ -2210,7 +2210,7 @@ async def handle_group_question(
 
     status_msg = await msg.reply_text("Думаю...")
 
-    response = await ai_client.answer_question(user_text, history=history)
+    response = await ai_client.answer_question(user_text, history=history[:-1])
     _add_to_history(chat_id, "assistant", response)
 
     await status_msg.edit_text(response)
@@ -3094,24 +3094,7 @@ async def handle_iris_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         if new_limit < 1 or new_limit > 20:
             await msg.reply_text("Лимит должен быть от 1 до 20.")
             return
-        mod = await db.get_moderation(chat.id) or {}
-        await db.set_moderation(
-            chat.id,
-            is_enabled=mod.get("is_enabled", 0),
-            welcome_msg=mod.get("welcome_msg", ""),
-            rules=mod.get("rules", ""),
-            antiflood_max=mod.get("antiflood_max", 5),
-            antiflood_seconds=mod.get("antiflood_seconds", 10),
-            bad_words=mod.get("bad_words", ""),
-        )
-        from database import DB_PATH
-        import aiosqlite
-        async with aiosqlite.connect(DB_PATH) as conn:
-            await conn.execute(
-                "UPDATE moderation SET warn_limit = ? WHERE chat_id = ?",
-                (new_limit, chat.id),
-            )
-            await conn.commit()
+        await db.set_moderation(chat.id, warn_limit=new_limit)
         await msg.reply_text(f"Лимит предупреждений установлен: {new_limit}")
         return
 
@@ -3425,24 +3408,7 @@ async def cmd_warnlimit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if new_limit < 1 or new_limit > 20:
         await update.message.reply_text("Лимит должен быть от 1 до 20.")
         return
-    mod = await db.get_moderation(chat.id) or {}
-    await db.set_moderation(
-        chat.id,
-        is_enabled=mod.get("is_enabled", 0),
-        welcome_msg=mod.get("welcome_msg", ""),
-        rules=mod.get("rules", ""),
-        antiflood_max=mod.get("antiflood_max", 5),
-        antiflood_seconds=mod.get("antiflood_seconds", 10),
-        bad_words=mod.get("bad_words", ""),
-    )
-    from database import DB_PATH
-    import aiosqlite
-    async with aiosqlite.connect(DB_PATH) as conn:
-        await conn.execute(
-            "UPDATE moderation SET warn_limit = ? WHERE chat_id = ?",
-            (new_limit, chat.id),
-        )
-        await conn.commit()
+    await db.set_moderation(chat.id, warn_limit=new_limit)
     await update.message.reply_text(f"Лимит предупреждений: {new_limit}")
 
 
