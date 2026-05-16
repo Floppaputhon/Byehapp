@@ -1,5 +1,7 @@
 import json
 import logging
+import tempfile
+from pathlib import Path
 
 from openai import AsyncOpenAI
 
@@ -71,3 +73,21 @@ async def generate_reply(chat_history: list[dict[str, str]], new_message: str) -
     messages.append({"role": "user", "content": new_message})
 
     return await _call_llm(messages, max_tokens=1024)
+
+
+async def transcribe_voice(file_bytes: bytes, file_ext: str = ".ogg") -> str:
+    tmp_path = Path(tempfile.mktemp(suffix=file_ext))
+    try:
+        tmp_path.write_bytes(file_bytes)
+        with open(tmp_path, "rb") as audio_file:
+            transcript = await client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                language="ru",
+            )
+        return transcript.text
+    except Exception as e:
+        logger.warning("Transcription failed: %s", e)
+        return ""
+    finally:
+        tmp_path.unlink(missing_ok=True)

@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Bot Control Panel</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        :root {
+            --bg: #0f0f13; --bg-card: #1a1a22; --bg-elevated: #252530;
+            --text: #f0f0f5; --text-dim: #8888a0; --text-muted: #55556a;
+            --accent: #6c5ce7; --green: #00cec9;
+            --green-glow: rgba(0,206,201,0.2); --red: #ff6b6b;
+            --red-glow: rgba(255,107,107,0.2);
+            --border: rgba(255,255,255,0.06);
+            --gradient-1: linear-gradient(135deg, #6c5ce7, #a29bfe);
+            --gradient-2: linear-gradient(135deg, #00cec9, #55efc4);
+            --gradient-3: linear-gradient(135deg, #ff6b6b, #ee5a24);
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--text); padding:0 16px 120px; min-height:100vh; -webkit-font-smoothing:antialiased; }
+        .hero { text-align:center; padding:28px 0 20px; position:relative; }
+        .hero-glow { position:absolute; top:-40px; left:50%; transform:translateX(-50%); width:200px; height:200px; background:radial-gradient(circle, rgba(108,92,231,0.15) 0%, transparent 70%); pointer-events:none; }
+        .hero-icon { width:64px; height:64px; background:var(--gradient-1); border-radius:20px; display:flex; align-items:center; justify-content:center; margin:0 auto 12px; font-size:28px; box-shadow:0 8px 32px rgba(108,92,231,0.3); }
+        .hero h1 { font-size:24px; font-weight:800; background:var(--gradient-1); -webkit-background-clip:text; -webkit-text-fill-color:transparent; letter-spacing:-0.5px; }
+        .hero p { font-size:13px; color:var(--text-dim); margin-top:4px; }
+        .status-pill { display:inline-flex; align-items:center; gap:6px; padding:6px 14px; border-radius:20px; font-size:12px; font-weight:600; margin-top:12px; background:var(--green-glow); color:var(--green); }
+        .status-dot { width:6px; height:6px; border-radius:50%; background:currentColor; animation:pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1;box-shadow:0 0 0 0 currentColor;} 50%{opacity:0.6;box-shadow:0 0 8px 2px currentColor;} }
+        .section-title { font-size:11px; font-weight:700; color:var(--text-muted); text-transform:uppercase; letter-spacing:1.5px; padding:20px 4px 10px; }
+        .card { background:var(--bg-card); border:1px solid var(--border); border-radius:16px; padding:16px; margin-bottom:10px; }
+        .stats-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .stat-card { background:var(--bg-elevated); border:1px solid var(--border); border-radius:14px; padding:16px; text-align:center; position:relative; overflow:hidden; }
+        .stat-card::before { content:""; position:absolute; top:0; left:0; right:0; height:3px; }
+        .stat-card.purple::before { background:var(--gradient-1); }
+        .stat-card.teal::before { background:var(--gradient-2); }
+        .stat-card.red::before { background:var(--gradient-3); }
+        .stat-card.blue::before { background:linear-gradient(135deg, #74b9ff, #0984e3); }
+        .stat-icon { font-size:22px; margin-bottom:6px; }
+        .stat-value { font-size:32px; font-weight:800; line-height:1; letter-spacing:-1px; }
+        .stat-label { font-size:11px; color:var(--text-dim); margin-top:4px; font-weight:500; }
+        .control-row { display:flex; align-items:center; justify-content:space-between; padding:6px 0; }
+        .control-info { flex:1; }
+        .control-label { font-size:16px; font-weight:600; }
+        .control-desc { font-size:12px; color:var(--text-dim); margin-top:2px; }
+        .toggle { position:relative; width:52px; height:32px; flex-shrink:0; }
+        .toggle input { opacity:0; width:0; height:0; }
+        .toggle-track { position:absolute; cursor:pointer; inset:0; background:#333340; border-radius:32px; transition:all 0.3s cubic-bezier(0.4,0,0.2,1); }
+        .toggle-track::before { content:""; position:absolute; width:26px; height:26px; left:3px; bottom:3px; background:white; border-radius:50%; transition:all 0.3s cubic-bezier(0.4,0,0.2,1); box-shadow:0 2px 8px rgba(0,0,0,0.3); }
+        .toggle input:checked + .toggle-track { background:var(--accent); box-shadow:0 0 16px rgba(108,92,231,0.4); }
+        .toggle input:checked + .toggle-track::before { transform:translateX(20px); }
+        .segment-control { display:flex; background:var(--bg); border-radius:12px; padding:3px; gap:2px; margin-top:12px; }
+        .segment-btn { flex:1; padding:10px 8px; border:none; border-radius:10px; background:transparent; color:var(--text-dim); font-size:13px; font-weight:600; cursor:pointer; transition:all 0.25s; text-align:center; }
+        .segment-btn.active { background:var(--accent); color:white; box-shadow:0 2px 12px rgba(108,92,231,0.4); }
+        .segment-btn:not(.active):hover { background:rgba(255,255,255,0.05); }
+        .conn-item { display:flex; align-items:center; padding:12px 0; border-bottom:1px solid var(--border); }
+        .conn-item:last-child { border-bottom:none; }
+        .conn-avatar { width:40px; height:40px; border-radius:12px; background:var(--gradient-1); display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; margin-right:12px; flex-shrink:0; }
+        .conn-info { flex:1; }
+        .conn-name { font-size:15px; font-weight:600; }
+        .conn-meta { font-size:12px; color:var(--text-dim); }
+        .badge { font-size:11px; padding:4px 10px; border-radius:8px; font-weight:700; }
+        .badge-on { background:var(--green-glow); color:var(--green); }
+        .badge-off { background:var(--red-glow); color:var(--red); }
+        .feature-list { display:flex; flex-direction:column; gap:8px; }
+        .feature-item { display:flex; align-items:center; gap:12px; padding:12px; background:var(--bg-elevated); border-radius:12px; border:1px solid var(--border); }
+        .feature-icon { width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0; }
+        .feature-icon.purple { background:rgba(108,92,231,0.15); }
+        .feature-icon.teal { background:rgba(0,206,201,0.15); }
+        .feature-icon.orange { background:rgba(253,203,110,0.15); }
+        .feature-icon.blue { background:rgba(116,185,255,0.15); }
+        .feature-text { font-size:14px; font-weight:500; }
+        .feature-desc { font-size:11px; color:var(--text-dim); }
+        .empty { text-align:center; padding:24px; color:var(--text-muted); font-size:14px; }
+        .loading-screen { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:60vh; gap:16px; }
+        .loader { width:40px; height:40px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin 0.7s linear infinite; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        .loader-text { font-size:14px; color:var(--text-dim); }
+        .action-btn { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; padding:15px; background:var(--gradient-1); color:white; border:none; border-radius:14px; font-size:15px; font-weight:700; cursor:pointer; transition:all 0.2s; box-shadow:0 4px 16px rgba(108,92,231,0.3); margin-top:16px; }
+        .action-btn:active { transform:scale(0.97); opacity:0.85; }
+        .divider { height:1px; background:var(--border); margin:12px 0; }
+    </style>
+</head>
+<body>
+    <div id="loading" class="loading-screen">
+        <div class="loader"></div>
+        <div class="loader-text">Загрузка панели...</div>
+    </div>
+    <div id="app" style="display:none;">
+        <div class="hero">
+            <div class="hero-glow"></div>
+            <div class="hero-icon">🤖</div>
+            <h1>AI Assistant</h1>
+            <p>Панель управления ботом</p>
+            <div class="status-pill" id="statusPill">
+                <div class="status-dot"></div>
+                <span id="uptimeText">Online</span>
+            </div>
+        </div>
+        <div class="section-title">Статистика</div>
+        <div class="stats-grid">
+            <div class="stat-card purple">
+                <div class="stat-icon">👥</div>
+                <div class="stat-value" id="usersCount">0</div>
+                <div class="stat-label">Пользователей</div>
+            </div>
+            <div class="stat-card teal">
+                <div class="stat-icon">🛡</div>
+                <div class="stat-value" id="moderatedCount">0</div>
+                <div class="stat-label">Проверено</div>
+            </div>
+            <div class="stat-card red">
+                <div class="stat-icon">🚫</div>
+                <div class="stat-value" id="blockedCount">0</div>
+                <div class="stat-label">Заблокировано</div>
+            </div>
+            <div class="stat-card blue">
+                <div class="stat-icon">🔗</div>
+                <div class="stat-value" id="connectionsCount">0</div>
+                <div class="stat-label">Подключений</div>
+            </div>
+        </div>
+        <div class="section-title">Управление</div>
+        <div class="card">
+            <div class="control-row">
+                <div class="control-info">
+                    <div class="control-label">Авто-ответы</div>
+                    <div class="control-desc">AI отвечает на сообщения автоматически</div>
+                </div>
+                <label class="toggle">
+                    <input type="checkbox" id="autoReplyToggle" onchange="toggleAutoReply()">
+                    <span class="toggle-track"></span>
+                </label>
+            </div>
+            <div class="divider"></div>
+            <div>
+                <div class="control-label">Кому отвечать</div>
+                <div class="control-desc">Выберите кому бот будет отвечать</div>
+                <div class="segment-control" id="replyTargetControl">
+                    <button class="segment-btn" data-value="all" onclick="setReplyTarget('all')">Всем</button>
+                    <button class="segment-btn" data-value="admin" onclick="setReplyTarget('admin')">Админам</button>
+                    <button class="segment-btn" data-value="owner" onclick="setReplyTarget('owner')">Владельцу</button>
+                </div>
+            </div>
+        </div>
+        <div class="section-title">Возможности</div>
+        <div class="feature-list">
+            <div class="feature-item">
+                <div class="feature-icon purple">💬</div>
+                <div>
+                    <div class="feature-text">AI Авто-ответы</div>
+                    <div class="feature-desc">Контекстные ответы на основе истории чата</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon teal">🎤</div>
+                <div>
+                    <div class="feature-text">Расшифровка голосовых</div>
+                    <div class="feature-desc">Whisper AI транскрибирует голосовые сообщения</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon orange">🛡</div>
+                <div>
+                    <div class="feature-text">Модерация</div>
+                    <div class="feature-desc">AI фильтрует спам и агрессию</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon blue">💼</div>
+                <div>
+                    <div class="feature-text">Business API</div>
+                    <div class="feature-desc">Интеграция с Telegram Business</div>
+                </div>
+            </div>
+        </div>
+        <div class="section-title">Бизнес-подключения</div>
+        <div class="card" id="connectionsCard">
+            <div class="empty">Нет активных подключений</div>
+        </div>
+        <button class="action-btn" onclick="loadStatus()">↻ Обновить</button>
+    </div>
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.ready();
+        tg.expand();
+        const API = window.location.origin;
+        function haptic(type) { try { tg.HapticFeedback.impactOccurred(type||"light"); } catch(e) {} }
+        async function loadStatus() {
+            try {
+                const r = await fetch(API+"/api/status");
+                const d = await r.json();
+                document.getElementById("autoReplyToggle").checked = d.auto_reply;
+                document.getElementById("usersCount").textContent = d.authenticated_users;
+                document.getElementById("moderatedCount").textContent = d.moderation.moderated;
+                document.getElementById("blockedCount").textContent = d.moderation.blocked;
+                document.getElementById("connectionsCount").textContent = d.business_connections.length;
+                var h=d.uptime.hours, m=d.uptime.minutes, s=d.uptime.seconds;
+                document.getElementById("uptimeText").textContent = h+"ч "+m+"м "+s+"с";
+                document.querySelectorAll(".segment-btn").forEach(function(btn) {
+                    btn.classList.toggle("active", btn.dataset.value === d.reply_target);
+                });
+                var card = document.getElementById("connectionsCard");
+                if (d.business_connections.length === 0) {
+                    card.innerHTML = '<div class="empty">Нет активных подключений</div>';
+                } else {
+                    card.innerHTML = d.business_connections.map(function(c) {
+                        var letter = (c.owner_username||"?")[0].toUpperCase();
+                        var name = c.owner_username||"Unknown";
+                        var cls = c.can_reply?"badge-on":"badge-off";
+                        var label = c.can_reply?"Ответы":"Чтение";
+                        return '<div class="conn-item"><div class="conn-avatar">'+letter+'</div><div class="conn-info"><div class="conn-name">@'+name+'</div><div class="conn-meta">Бизнес-аккаунт</div></div><span class="badge '+cls+'">'+label+'</span></div>';
+                    }).join("");
+                }
+                document.getElementById("loading").style.display = "none";
+                document.getElementById("app").style.display = "block";
+            } catch (e) {
+                console.error("Load failed:", e);
+                document.getElementById("loading").innerHTML = '<div class="empty">Ошибка подключения</div>';
+            }
+        }
+        async function toggleAutoReply() {
+            var on = document.getElementById("autoReplyToggle").checked;
+            haptic("medium");
+            try {
+                await fetch(API+"/api/auto-reply", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({enabled:on, init_data:tg.initData||""})});
+            } catch(e) { document.getElementById("autoReplyToggle").checked = !on; }
+        }
+        async function setReplyTarget(target) {
+            haptic("light");
+            document.querySelectorAll(".segment-btn").forEach(function(btn) {
+                btn.classList.toggle("active", btn.dataset.value === target);
+            });
+            try {
+                await fetch(API+"/api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({key:"reply_target", value:target, init_data:tg.initData||""})});
+            } catch(e) { console.error("Setting failed:", e); }
+        }
+        loadStatus();
+        setInterval(loadStatus, 15000);
+    </script>
+</body>
+</html>

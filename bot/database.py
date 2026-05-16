@@ -76,6 +76,10 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
             ("auto_reply", "off"),
         )
+        cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            ("reply_target", "all"),
+        )
 
         conn.commit()
 

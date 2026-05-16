@@ -1,10 +1,21 @@
 import logging
+import threading
 
+import uvicorn
 from telegram.ext import Application, BusinessConnectionHandler, CommandHandler, MessageHandler, filters
 
 from bot.config import TELEGRAM_BOT_TOKEN
 from bot.database import init_db
-from bot.handlers import handle_business_connection, handle_business_message, handle_direct_message, start_command
+from bot.handlers import (
+    handle_business_connection,
+    handle_business_message,
+    handle_business_voice,
+    handle_direct_message,
+    handle_voice_message,
+    start_command,
+)
+
+WEBAPP_PORT = 8080
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -29,8 +40,22 @@ def main() -> None:
 
     app.add_handler(
         MessageHandler(
+            (filters.VOICE | filters.AUDIO) & filters.UpdateType.BUSINESS_MESSAGE,
+            handle_business_voice,
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
             filters.TEXT & ~filters.COMMAND & filters.UpdateType.BUSINESS_MESSAGE,
             handle_business_message,
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            (filters.VOICE | filters.AUDIO) & ~filters.UpdateType.BUSINESS_MESSAGE,
+            handle_voice_message,
         )
     )
 
@@ -42,6 +67,12 @@ def main() -> None:
         )
     )
 
+    webapp_thread = threading.Thread(
+        target=_run_webapp, daemon=True, name="webapp",
+    )
+    webapp_thread.start()
+    logger.info("Mini App server started on port %d", WEBAPP_PORT)
+
     logger.info("Bot started polling...")
     app.run_polling(
         allowed_updates=[
@@ -52,6 +83,12 @@ def main() -> None:
         ],
         drop_pending_updates=True,
     )
+
+
+def _run_webapp() -> None:
+    from webapp.server import app as webapp_app  # noqa: WPS433
+
+    uvicorn.run(webapp_app, host="0.0.0.0", port=WEBAPP_PORT, log_level="info")
 
 
 if __name__ == "__main__":

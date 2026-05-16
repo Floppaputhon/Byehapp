@@ -12,6 +12,7 @@ from bot.database import (
     get_business_connection_owner,
     get_chat_history,
     get_moderation_stats_today,
+    get_setting,
     is_admin,
     is_auto_reply_on,
     is_user_authenticated,
@@ -19,7 +20,7 @@ from bot.database import (
     save_business_connection,
     set_setting,
 )
-from bot.llm_client import generate_reply, moderate_message
+from bot.llm_client import generate_reply, moderate_message, transcribe_voice
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,91 @@ async def handle_business_connection(update: Update, context: ContextTypes.DEFAU
             logger.warning("Could not send business connection notification: %s", e)
 
 
+async def handle_voice_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if message is None or update.effective_user is None:
+        return
+
+    user_id = update.effective_user.id
+    if not is_user_authenticated(user_id):
+        await message.reply_text("Для использования бота введите пароль.")
+        return
+
+    voice = message.voice or message.audio
+    if voice is None:
+        return
+
+    await message.reply_text("Расшифровываю голосовое сообщение...")
+
+    voice_file = await context.bot.get_file(voice.file_id)
+    file_bytes = await voice_file.download_as_bytearray()
+
+    transcript = await transcribe_voice(bytes(file_bytes))
+    if not transcript:
+        await message.reply_text("Не удалось расшифровать голосовое сообщение.")
+        return
+
+    chat_id = message.chat_id
+    add_message(chat_id, user_id, "user", transcript)
+
+    reply = f"Расшифровка:\n{transcript}"
+
+    if is_auto_reply_on():
+        history = get_chat_history(chat_id)
+        ai_reply = await generate_reply(history, transcript)
+        if ai_reply:
+            add_message(chat_id, 0, "assistant", ai_reply)
+            reply += f"\n\nОтвет:\n{ai_reply}"
+
+    await message.reply_text(reply)
+
+
+async def handle_business_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.business_message is None:
+        return
+
+    message = update.business_message
+    voice = message.voice or message.audio
+    if voice is None:
+        return
+
+    user_id = message.from_user.id if message.from_user else 0
+    chat_id = message.chat.id
+    connection_id = message.business_connection_id
+
+    owner_id = get_business_connection_owner(connection_id) if connection_id else None
+    if owner_id is not None and user_id == owner_id:
+        return
+
+    voice_file = await context.bot.get_file(voice.file_id)
+    file_bytes = await voice_file.download_as_bytearray()
+
+    transcript = await transcribe_voice(bytes(file_bytes))
+    if not transcript:
+        return
+
+    add_message(chat_id, user_id, "user", transcript)
+
+    reply_target = get_setting("reply_target") or "all"
+    if not _should_reply(reply_target, user_id, owner_id):
+        return
+
+    if is_auto_reply_on():
+        history = get_chat_history(chat_id)
+        ai_reply = await generate_reply(history, transcript)
+        if ai_reply:
+            full_reply = f"Расшифровка:\n{transcript}\n\nОтвет:\n{ai_reply}"
+            add_message(chat_id, 0, "assistant", ai_reply)
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=full_reply,
+                    business_connection_id=connection_id,
+                )
+            except Exception as e:
+                logger.warning("Could not reply to business voice: %s", e)
+
+
 async def handle_direct_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_message is None or update.effective_user is None:
         return
@@ -108,6 +194,10 @@ async def handle_direct_message(update: Update, context: ContextTypes.DEFAULT_TY
 
     if text.lower() == "!status":
         await _handle_status_command(update)
+        return
+
+    if text.lower().startswith("!цель"):
+        await _handle_reply_target_command(update, text)
         return
 
     chat_id = message.chat_id
@@ -139,6 +229,8 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
         add_message(chat_id, user_id, "assistant", text)
         return
 
+    reply_target = get_setting("reply_target") or "all"
+
     moderation_result = await moderate_message(text)
     log_moderation(
         chat_id=chat_id,
@@ -161,7 +253,7 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
 
     add_message(chat_id, user_id, "user", text)
 
-    if is_auto_reply_on():
+    if is_auto_reply_on() and _should_reply(reply_target, user_id, owner_id):
         history = get_chat_history(chat_id)
         reply_text = await generate_reply(history, text)
         if reply_text:
@@ -198,6 +290,45 @@ async def _handle_auth(update: Update, text: str) -> None:
         await update.effective_message.reply_text(
             "Неверный пароль. Попробуйте ещё раз."
         )
+
+
+def _should_reply(reply_target: str, user_id: int, owner_id: int | None) -> bool:
+    if reply_target == "all":
+        return True
+    if reply_target == "owner" and owner_id is not None and user_id == owner_id:
+        return True
+    if reply_target == "admin":
+        return is_admin(user_id) or (owner_id is not None and user_id == owner_id)
+    return True
+
+
+async def _handle_reply_target_command(update: Update, text: str) -> None:
+    if update.effective_message is None or update.effective_user is None:
+        return
+
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.effective_message.reply_text("Эта команда доступна только администраторам.")
+        return
+
+    parts = text.lower().split()
+    valid_targets = {"all": "всем", "admin": "админам", "owner": "владельцу"}
+
+    if len(parts) >= 2:
+        target = parts[1]
+        if target in valid_targets:
+            set_setting("reply_target", target)
+            await update.effective_message.reply_text(f"Цель ответов: {valid_targets[target]}")
+            return
+
+    current = get_setting("reply_target") or "all"
+    await update.effective_message.reply_text(
+        f"Текущая цель: {valid_targets.get(current, current)}\n\n"
+        "Используйте:\n"
+        "!цель all - отвечать всем\n"
+        "!цель admin - только админам и владельцу\n"
+        "!цель owner - только владельцу бота"
+    )
 
 
 async def _handle_auto_reply_command(update: Update, text: str) -> None:
