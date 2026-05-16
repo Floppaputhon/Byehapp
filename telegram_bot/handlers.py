@@ -1,7 +1,9 @@
 """All bot handlers — business API events, commands, and periodic jobs."""
 
 import datetime
+import os
 import re
+import tempfile
 from collections import deque
 
 from telegram import Update
@@ -1401,7 +1403,7 @@ async def handle_voice_message(
 
     try:
         tg_file = await context.bot.get_file(voice.file_id)
-        local_path = f"/home/ubuntu/voice_{msg.message_id}.ogg"
+        local_path = os.path.join(tempfile.gettempdir(), f"voice_{msg.message_id}.ogg")
         await tg_file.download_to_drive(local_path)
     except Exception as e:
         await status_msg.edit_text(
@@ -1411,7 +1413,6 @@ async def handle_voice_message(
 
     transcription = await ai_client.transcribe_voice(local_path)
 
-    import os
     try:
         os.remove(local_path)
     except Exception:
