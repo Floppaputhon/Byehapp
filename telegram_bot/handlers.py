@@ -13,6 +13,7 @@ from config import OWNER_ID
 
 _chat_history: dict[int, deque] = {}
 _MAX_HISTORY = 20
+_autoreply_sent: set[int] = set()
 
 
 def _get_history(chat_id: int) -> list[dict]:
@@ -143,7 +144,8 @@ async def handle_business_message(
         ar = await db.get_autoreply(OWNER_ID)
         if ar and ar.get("message"):
             bc_id = getattr(msg, "business_connection_id", None)
-            if bc_id:
+            if bc_id and msg.chat.id not in _autoreply_sent:
+                _autoreply_sent.add(msg.chat.id)
                 try:
                     await context.bot.send_message(
                         chat_id=msg.chat.id,
@@ -614,12 +616,14 @@ async def cmd_autoreply(
 
     if action == "off":
         await db.set_autoreply(OWNER_ID, 0, "")
+        _autoreply_sent.clear()
         await update.message.reply_text("Автоответ выключен.")
         return
 
     if action == "on":
         message = " ".join(context.args[1:]) if len(context.args) > 1 else "Я сейчас занят, отвечу позже."
         await db.set_autoreply(OWNER_ID, 1, message)
+        _autoreply_sent.clear()
         await update.message.reply_text(
             f"<b>Автоответ включён!</b>\n\nСообщение: {message}",
             parse_mode="HTML",
@@ -628,6 +632,7 @@ async def cmd_autoreply(
 
     message = " ".join(context.args)
     await db.set_autoreply(OWNER_ID, 1, message)
+    _autoreply_sent.clear()
     await update.message.reply_text(
         f"<b>Автоответ включён!</b>\n\nСообщение: {message}",
         parse_mode="HTML",
@@ -910,6 +915,22 @@ async def handle_direct_question(
         await _handle_autoreply_nl(msg, chat_id)
     elif intent == "QUICK_REPLY":
         await _handle_qr_nl(msg, chat_id)
+    elif intent == "DELETED":
+        await _handle_deleted_nl(msg, chat_id)
+    elif intent == "PENDING":
+        await _handle_pending_nl(msg, chat_id)
+    elif intent == "STATS":
+        await _handle_stats_nl(msg, chat_id)
+    elif intent == "REMIND_LIST":
+        await _handle_remind_list_nl(msg, chat_id)
+    elif intent == "REMIND_SET":
+        await _handle_remind_set_nl(msg, chat_id)
+    elif intent == "SEARCH":
+        await _handle_search_nl(msg, chat_id)
+    elif intent == "EXPORT":
+        await _handle_export_nl(msg, chat_id)
+    elif intent == "SUMMARY":
+        await _handle_summary_nl(msg, chat_id)
     else:
         history = _get_history(chat_id)
         answer = await ai_client.answer_question(msg.text, history=history[:-1])
@@ -1301,8 +1322,9 @@ async def _handle_autoreply_nl(msg, chat_id: int) -> None:
         "Автоответ\nTools:\n  Autoreply_config"
     )
 
-    if re.search(r"(?:выключи|убери|отключи|off|выкл)", text, re.IGNORECASE):
+    if re.search(r"(?:выключи|убери|отключи|off|выкл|отключить)", text, re.IGNORECASE):
         await db.set_autoreply(OWNER_ID, 0, "")
+        _autoreply_sent.clear()
         result = "Автоответ выключен."
         _add_to_history(chat_id, "assistant", result)
         await status_msg.edit_text(
@@ -1311,13 +1333,14 @@ async def _handle_autoreply_nl(msg, chat_id: int) -> None:
         return
 
     ar_text = re.sub(
-        r"^(?:включи|установи|поставь|установить)\s+автоответ\s*(?:на\s*)?",
+        r"^(?:включи|установи|поставь|установить|включить)\s+(?:автоответ(?:чик)?)\s*(?:на\s*)?",
         "", msg.text, flags=re.IGNORECASE,
     ).strip()
     if not ar_text or ar_text.lower() == msg.text.lower():
         ar_text = "Я сейчас занят, отвечу позже."
 
     await db.set_autoreply(OWNER_ID, 1, ar_text)
+    _autoreply_sent.clear()
     result = f"Автоответ включён: {ar_text}"
     _add_to_history(chat_id, "assistant", result)
     await status_msg.edit_text(
@@ -1353,6 +1376,297 @@ async def _handle_qr_nl(msg, chat_id: int) -> None:
         "/qr list\n"
         "/qr use [имя]\n"
         "/qr delete [имя]"
+    )
+
+
+# ── Voice message handler ──────────────────────────────────────────
+
+
+async def handle_voice_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Transcribe voice message and respond with AI."""
+    msg = update.message
+    if not msg:
+        return
+
+    voice = msg.voice or msg.audio
+    if not voice:
+        return
+
+    chat_id = msg.chat.id
+    status_msg = await msg.reply_text(
+        "Распознаю голосовое\nTools:\n  Voice_transcribe"
+    )
+
+    try:
+        tg_file = await context.bot.get_file(voice.file_id)
+        local_path = f"/home/ubuntu/voice_{msg.message_id}.ogg"
+        await tg_file.download_to_drive(local_path)
+    except Exception as e:
+        await status_msg.edit_text(
+            f"Распознаю голосовое\nTools:\n  Voice_transcribe — ошибка: {e}"
+        )
+        return
+
+    transcription = await ai_client.transcribe_voice(local_path)
+
+    import os
+    try:
+        os.remove(local_path)
+    except Exception:
+        pass
+
+    if not transcription:
+        await status_msg.edit_text(
+            "Распознаю голосовое\nTools:\n"
+            "  Voice_transcribe — не удалось распознать\n\n"
+            "Не смог распознать голосовое сообщение. "
+            "Установи ffmpeg и SpeechRecognition для распознавания."
+        )
+        return
+
+    await status_msg.edit_text(
+        "Распознаю голосовое\nTools:\n"
+        "  Voice_transcribe ✓\n"
+        "  AI_response\n\n"
+        f"Распознано: {transcription}"
+    )
+
+    _add_to_history(chat_id, "user", f"[Голосовое]: {transcription}")
+    history = _get_history(chat_id)
+    answer = await ai_client.answer_question(transcription, history=history[:-1])
+    _add_to_history(chat_id, "assistant", answer)
+
+    await status_msg.edit_text(
+        "Распознаю голосовое\nTools:\n"
+        "  Voice_transcribe ✓\n"
+        "  AI_response ✓\n\n"
+        f"Распознано: {transcription}\n\n"
+        f"{answer}"
+    )
+
+
+# ── NL handlers for basic commands ───────────────────────────────────
+
+
+async def _handle_deleted_nl(msg, chat_id: int) -> None:
+    status_msg = await msg.reply_text(
+        "Удалённые сообщения\nTools:\n  Deleted_lookup"
+    )
+    messages = await db.get_deleted_messages(10)
+    if not messages:
+        result = "Удалённых сообщений нет."
+    else:
+        lines = []
+        for m in messages:
+            name = m.get("first_name") or "Неизвестный"
+            content = m.get("text") or m.get("caption") or ""
+            media = (
+                f" [{MEDIA_LABELS.get(m['media_type'], m['media_type'])}]"
+                if m.get("media_type") else ""
+            )
+            date_str = (m.get("deleted_at") or "")[:16].replace("T", " ")
+            lines.append(f"{name} ({date_str}): {content[:100]}{media}")
+        result = "Удалённые:\n" + "\n".join(lines)
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        f"Удалённые сообщения\nTools:\n  Deleted_lookup ✓\n\n{result}"
+    )
+
+
+async def _handle_pending_nl(msg, chat_id: int) -> None:
+    status_msg = await msg.reply_text(
+        "Неотвеченные\nTools:\n  Pending_check"
+    )
+    pending = await db.get_pending_replies(limit=15)
+    if not pending:
+        result = "Нет неотвеченных сообщений!"
+    else:
+        lines = []
+        for p in pending:
+            name = p.get("first_name") or "Неизвестный"
+            username = f" (@{p['username']})" if p.get("username") else ""
+            content = (p.get("text") or "")[:80]
+            lines.append(f"{name}{username}: {content}")
+        result = "Ожидают ответа:\n" + "\n".join(lines)
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        f"Неотвеченные\nTools:\n  Pending_check ✓\n\n{result}"
+    )
+
+
+async def _handle_stats_nl(msg, chat_id: int) -> None:
+    status_msg = await msg.reply_text("Статистика\nTools:\n  Stats_calc")
+    stats = await db.get_message_stats(24)
+    if not stats:
+        result = "Нет данных за последние 24ч."
+    else:
+        lines = ["Статистика за 24ч:"]
+        for s in stats:
+            name = s.get("first_name") or "Неизвестный"
+            lines.append(f"  {name}: {s['count']} сообщений")
+        result = "\n".join(lines)
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        f"Статистика\nTools:\n  Stats_calc ✓\n\n{result}"
+    )
+
+
+async def _handle_remind_list_nl(msg, chat_id: int) -> None:
+    status_msg = await msg.reply_text(
+        "Напоминания\nTools:\n  Reminder_list"
+    )
+    reminders = await db.get_pending_reminders(OWNER_ID)
+    if not reminders:
+        result = "Активных напоминаний нет."
+    else:
+        lines = []
+        for r in reminders:
+            target = f" для {r['target_name']}" if r.get("target_name") else ""
+            time_str = (r.get("remind_at") or "")[:16].replace("T", " ")
+            lines.append(f"  {time_str}{target}: {r['reminder_text']}")
+        result = "Активные напоминания:\n" + "\n".join(lines)
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        f"Напоминания\nTools:\n  Reminder_list ✓\n\n{result}"
+    )
+
+
+async def _handle_remind_set_nl(msg, chat_id: int) -> None:
+    status_msg = await msg.reply_text(
+        "Напоминание\nTools:\n  Reminder_set"
+    )
+    raw = msg.text
+    now = datetime.datetime.now()
+    remind_at = None
+
+    minutes_match = re.search(r"через\s+(\d+)\s*(?:мин|м\b)", raw, re.IGNORECASE)
+    hours_match = re.search(r"через\s+(\d+)\s*(?:час|ч\b)", raw, re.IGNORECASE)
+    clock_match = re.search(r"в\s+(\d{1,2}):(\d{2})", raw)
+
+    if minutes_match:
+        remind_at = now + datetime.timedelta(minutes=int(minutes_match.group(1)))
+    elif hours_match:
+        remind_at = now + datetime.timedelta(hours=int(hours_match.group(1)))
+    elif clock_match:
+        hour, minute = int(clock_match.group(1)), int(clock_match.group(2))
+        remind_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if remind_at <= now:
+            remind_at += datetime.timedelta(days=1)
+    else:
+        remind_at = now + datetime.timedelta(hours=1)
+
+    text = re.sub(
+        r"(?:напомни\s+(?:мне\s+)?|поставь\s+напоминание\s*|установи\s+напоминание\s*)",
+        "", raw, flags=re.IGNORECASE,
+    ).strip()
+    text = re.sub(
+        r"(?:через\s+\d+\s*(?:мин|час|ч\b|м\b)|в\s+\d{1,2}:\d{2})",
+        "", text, flags=re.IGNORECASE,
+    ).strip()
+    if not text:
+        text = "напоминание"
+
+    await db.add_reminder(
+        owner_id=OWNER_ID,
+        chat_id=chat_id,
+        target_name="",
+        text=text,
+        remind_at=remind_at.isoformat(),
+    )
+
+    result = f"Напоминание: {text}\nВремя: {remind_at.strftime('%d.%m %H:%M')}"
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        f"Напоминание\nTools:\n  Reminder_set ✓\n\n{result}"
+    )
+
+
+async def _handle_search_nl(msg, chat_id: int) -> None:
+    status_msg = await msg.reply_text("Поиск\nTools:\n  Message_search")
+    query = re.sub(
+        r"^(?:найди|ищи|поиск)\s+(?:сообщени[яе]?\s+(?:про|о|об|\s+со\s+словом)?\s*|в\s+чат[ае]?\s+)",
+        "", msg.text, flags=re.IGNORECASE,
+    ).strip()
+    if not query:
+        query = msg.text
+
+    results = await db.search_messages(query, limit=10)
+    if not results:
+        result = f"По запросу '{query}' ничего не найдено."
+    else:
+        lines = []
+        for m in results:
+            name = m.get("first_name") or "Неизвестный"
+            text = (m.get("text") or m.get("caption") or "")[:80]
+            date_str = (m.get("date") or "")[:16].replace("T", " ")
+            lines.append(f"[{date_str}] {name}: {text}")
+        result = f"Найдено {len(results)}:\n" + "\n".join(lines)
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        f"Поиск\nTools:\n  Message_search → '{query}' ✓\n\n{result}"
+    )
+
+
+async def _handle_export_nl(msg, chat_id: int) -> None:
+    status_msg = await msg.reply_text("Экспорт\nTools:\n  Chat_export")
+
+    username = _extract_username(msg.text)
+    target_chat_id = None
+    if username:
+        chat_data = await db.find_chat_by_username(username)
+        if chat_data:
+            target_chat_id = chat_data["chat_id"]
+
+    messages = await db.export_chat_messages(target_chat_id)
+    if not messages:
+        result = "Нет сообщений для экспорта."
+        _add_to_history(chat_id, "assistant", result)
+        await status_msg.edit_text(
+            f"Экспорт\nTools:\n  Chat_export — нет сообщений\n\n{result}"
+        )
+        return
+
+    lines = []
+    for m in messages[-50:]:
+        name = m.get("first_name") or "Неизвестный"
+        text = (
+            m.get("text") or m.get("caption")
+            or f"[{MEDIA_LABELS.get(m.get('media_type', ''), 'медиа')}]"
+        )
+        date_str = (m.get("date") or "")[:16].replace("T", " ")
+        deleted = " [УДАЛЕНО]" if m.get("is_deleted") else ""
+        lines.append(f"[{date_str}] {name}: {text}{deleted}")
+    result = "\n".join(lines)
+
+    _add_to_history(chat_id, "assistant", f"Экспорт: {len(messages)} сообщений")
+    await status_msg.edit_text(
+        f"Экспорт\nTools:\n  Chat_export ✓ → {len(messages)} сообщений"
+    )
+    await _safe_reply(msg, result)
+
+
+async def _handle_summary_nl(msg, chat_id: int) -> None:
+    status_msg = await msg.reply_text(
+        "Пересказ\nTools:\n  Summary_generate"
+    )
+    messages = await db.get_recent_messages(chat_id=None, hours=24)
+    if not messages:
+        result = "Нет сообщений за последние 24ч."
+        _add_to_history(chat_id, "assistant", result)
+        await status_msg.edit_text(
+            f"Пересказ\nTools:\n  Summary_generate — нет сообщений\n\n{result}"
+        )
+        return
+
+    await status_msg.edit_text(
+        f"Пересказ\nTools:\n  Summary_generate — анализ {len(messages)} сообщений"
+    )
+    summary = await ai_client.summarize_messages(messages)
+    _add_to_history(chat_id, "assistant", summary)
+    await status_msg.edit_text(
+        f"Пересказ\nTools:\n  Summary_generate ✓\n\n{summary}"
     )
 
 

@@ -139,8 +139,8 @@ _CONTACT_PATTERNS = _re.compile(
 )
 
 _AUTOREPLY_PATTERNS = _re.compile(
-    r"(?:(?:включи|выключи|убери|установи|поставь)\s+автоответ|"
-    r"автоответ\s+(?:вкл|выкл|on|off)|"
+    r"(?:(?:включи|выключи|убери|отключи|установи|поставь|отключить|включить)\s+автоответ|"
+    r"автоответ\s*(?:вкл|выкл|on|off|статус|\?)|"
     r"автоответчик)",
     _re.IGNORECASE,
 )
@@ -149,6 +149,51 @@ _QR_PATTERNS = _re.compile(
     r"(?:быстры[йе]\s+ответ|шаблон\s+ответ|"
     r"сохрани\s+(?:быстрый\s+)?ответ|"
     r"(?:мои|покажи|список)\s+(?:шаблон|быстр))",
+    _re.IGNORECASE,
+)
+
+
+_DELETED_PATTERNS = _re.compile(
+    r"(?:(?:покажи|показать)\s+удалённые|"
+    r"удалённые\s+сообщени|"
+    r"что\s+удалил[аиоы]?|кто\s+удалил)",
+    _re.IGNORECASE,
+)
+
+_PENDING_PATTERNS = _re.compile(
+    r"(?:кому\s+(?:надо|нужно|должен)?\s*(?:ответить|написать|позвонить)|"
+    r"неотвеченн|ожидают\s+ответ|непрочитанн)",
+    _re.IGNORECASE,
+)
+
+_STATS_PATTERNS = _re.compile(
+    r"(?:(?:покажи|показать)?\s*стати[сц]тик|сколько\s+сообщен)",
+    _re.IGNORECASE,
+)
+
+_SEARCH_PATTERNS = _re.compile(
+    r"(?:(?:найди|ищи|поиск)\s+(?:сообщени|в\s+чат)|поиск\s+по\s+сообщени)",
+    _re.IGNORECASE,
+)
+
+_EXPORT_PATTERNS = _re.compile(
+    r"(?:экспорт(?:ируй)?\s+(?:чат|истори)|"
+    r"выгрузи\s+(?:чат|истори)|скачай\s+(?:чат|истори))",
+    _re.IGNORECASE,
+)
+
+_REMIND_LIST_PATTERNS = _re.compile(
+    r"(?:(?:мои|покажи|список|активные)\s+напоминани|напоминани[яе]\s+(?:мои|список|покажи))",
+    _re.IGNORECASE,
+)
+
+_REMIND_SET_PATTERNS = _re.compile(
+    r"(?:напомни\s+(?:мне\s+)?(?:через|в\s+\d)|поставь\s+напоминани|установи\s+напоминани)",
+    _re.IGNORECASE,
+)
+
+_SUMMARY_PATTERNS = _re.compile(
+    r"(?:(?:сделай|дай)\s+пересказ|перескажи\s+чат|(?:сводка|пересказ)\s+(?:за|чат))",
     _re.IGNORECASE,
 )
 
@@ -167,11 +212,100 @@ def classify_intent(message: str) -> str:
         return "CONTACT_INFO"
     if _QR_PATTERNS.search(text):
         return "QUICK_REPLY"
+    if _DELETED_PATTERNS.search(text):
+        return "DELETED"
+    if _PENDING_PATTERNS.search(text):
+        return "PENDING"
+    if _STATS_PATTERNS.search(text):
+        return "STATS"
+    if _REMIND_LIST_PATTERNS.search(text):
+        return "REMIND_LIST"
+    if _REMIND_SET_PATTERNS.search(text):
+        return "REMIND_SET"
+    if _SEARCH_PATTERNS.search(text):
+        return "SEARCH"
+    if _EXPORT_PATTERNS.search(text):
+        return "EXPORT"
+    if _SUMMARY_PATTERNS.search(text):
+        return "SUMMARY"
     if _SCHEDULE_PATTERNS.search(text):
         return "SCHEDULE_MESSAGE"
     if _SEND_PATTERNS.search(text):
         return "MESSAGE_SEND"
     return "GENERAL"
+
+
+async def transcribe_voice(file_path: str) -> str:
+    """Transcribe a voice file using OpenAI-compatible whisper API."""
+    headers = {"Authorization": f"Bearer {AI_API_KEY}"}
+    try:
+        data = aiohttp.FormData()
+        data.add_field(
+            "file",
+            open(file_path, "rb"),  # noqa: SIM115
+            filename="voice.ogg",
+            content_type="audio/ogg",
+        )
+        data.add_field("model", "whisper-1")
+        data.add_field("language", "ru")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{AI_API_URL}/audio/transcriptions",
+                headers=headers,
+                data=data,
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    text = result.get("text", "")
+                    if text:
+                        return text
+    except Exception:
+        pass
+
+    return await _google_transcribe(file_path)
+
+
+async def _google_transcribe(ogg_path: str) -> str:
+    """Fallback: convert OGG to WAV via ffmpeg, then use Google free speech API."""
+    import asyncio
+    import os
+    import subprocess as _sp
+
+    wav_path = ogg_path + ".wav"
+    try:
+        proc = await asyncio.to_thread(
+            _sp.run,
+            ["ffmpeg", "-y", "-i", ogg_path, "-ar", "16000", "-ac", "1", wav_path],
+            capture_output=True,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            return ""
+    except Exception:
+        return ""
+
+    if not os.path.exists(wav_path):
+        return ""
+
+    try:
+        import speech_recognition as sr
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(wav_path) as source:
+            audio = recognizer.record(source)
+        text = await asyncio.to_thread(
+            recognizer.recognize_google, audio, language="ru-RU"
+        )
+        return text
+    except Exception:
+        return ""
+    finally:
+        try:
+            os.remove(wav_path)
+        except Exception:
+            pass
 
 
 async def answer_question(
@@ -181,13 +315,15 @@ async def answer_question(
     system_prompt = (
         "Ты — умный AI-ассистент в Telegram по имени gemeni. "
         "Ты подключён как бизнес-бот через Telegram Business API. "
-        "Ты МОЖЕШЬ отправлять сообщения другим пользователям, читать чаты, "
-        "планировать отправку сообщений. "
-        "Если пользователь просит написать кому-то — скажи что сделаешь это. "
+        "Ты МОЖЕШЬ: отправлять сообщения, читать чаты, планировать отправку, "
+        "показывать удалённые сообщения, пересказывать чаты, ставить напоминания, "
+        "показывать кому ответить, статистику, поиск, перевод, анализ тона, "
+        "включать/выключать автоответ, сохранять заметки, делать рассылку, "
+        "показывать инфо о контакте, экспортировать чаты, "
+        "управлять шаблонами ответов, расшифровывать голосовые. "
         "Ты помнишь весь диалог с пользователем. "
         "Отвечай на вопросы точно, полезно и кратко. "
-        "Отвечай на том языке, на котором задан вопрос. "
-        "Если вопрос на русском — отвечай на русском."
+        "Отвечай на том языке, на котором задан вопрос."
     )
     return await ai_chat(system_prompt, question, max_tokens=1500, history=history)
 

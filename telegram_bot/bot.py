@@ -79,6 +79,14 @@ def main() -> None:
     app.add_handler(CommandHandler("export", handlers.cmd_export))
     app.add_handler(CommandHandler("qr", handlers.cmd_qr))
 
+    # Voice message handler
+    app.add_handler(
+        MessageHandler(
+            (filters.VOICE | filters.AUDIO) & filters.ChatType.PRIVATE,
+            handlers.handle_voice_message,
+        )
+    )
+
     # Free-form AI Q&A — must be AFTER command handlers
     app.add_handler(
         MessageHandler(

@@ -2,3 +2,4 @@ python-telegram-bot[job-queue]==21.6
 aiohttp==3.11.11
 aiosqlite==0.20.0
 python-dotenv==1.0.1
+SpeechRecognition>=3.10.0
