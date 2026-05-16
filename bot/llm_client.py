@@ -1,11 +1,13 @@
+import json
 import logging
-from openai import OpenAI
+
+from openai import AsyncOpenAI
 
 from bot.config import VECTORENGINE_API_KEY, VECTORENGINE_BASE_URL, LLM_MODEL, LLM_MODEL_FALLBACK
 
 logger = logging.getLogger(__name__)
 
-client = OpenAI(
+client = AsyncOpenAI(
     api_key=VECTORENGINE_API_KEY,
     base_url=VECTORENGINE_BASE_URL,
 )
@@ -29,11 +31,11 @@ Be concise, helpful, and professional. Reply in the same language as the user's 
 If the user writes in Russian, reply in Russian. If in English, reply in English."""
 
 
-def _call_llm(messages: list[dict[str, str]], max_tokens: int = 1024) -> str:
+async def _call_llm(messages: list[dict[str, str]], max_tokens: int = 1024) -> str:
     models = [LLM_MODEL, LLM_MODEL_FALLBACK]
     for model in models:
         try:
-            response = client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model=model,
                 messages=messages,
                 max_tokens=max_tokens,
@@ -48,14 +50,12 @@ def _call_llm(messages: list[dict[str, str]], max_tokens: int = 1024) -> str:
     return ""
 
 
-def moderate_message(text: str) -> dict[str, object]:
-    import json
-
+async def moderate_message(text: str) -> dict[str, object]:
     messages = [
         {"role": "system", "content": MODERATION_SYSTEM_PROMPT},
         {"role": "user", "content": text},
     ]
-    raw = _call_llm(messages, max_tokens=150)
+    raw = await _call_llm(messages, max_tokens=150)
 
     try:
         result = json.loads(raw)
@@ -65,9 +65,9 @@ def moderate_message(text: str) -> dict[str, object]:
         return {"block": False, "reason": "parse_error"}
 
 
-def generate_reply(chat_history: list[dict[str, str]], new_message: str) -> str:
+async def generate_reply(chat_history: list[dict[str, str]], new_message: str) -> str:
     messages = [{"role": "system", "content": REPLY_SYSTEM_PROMPT}]
     messages.extend(chat_history)
     messages.append({"role": "user", "content": new_message})
 
-    return _call_llm(messages, max_tokens=1024)
+    return await _call_llm(messages, max_tokens=1024)
