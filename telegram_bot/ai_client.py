@@ -116,11 +116,57 @@ _SEND_PATTERNS = _re.compile(
     _re.IGNORECASE,
 )
 
+_BROADCAST_PATTERNS = _re.compile(
+    r"(?:(?:напиши|отправь|пошли|написать|отправить)\s+всем|"
+    r"рассылк[аиу]|"
+    r"(?:массов|всем\s+(?:напиши|отправь|пошли)))",
+    _re.IGNORECASE,
+)
+
+_NOTE_PATTERNS = _re.compile(
+    r"(?:запомни|запиши|заметк[аиу]|сохрани\s+(?:заметку|запись)|"
+    r"(?:мои|покажи|список)\s+заметк|что\s+(?:я\s+)?записывал|"
+    r"удали\s+заметк)",
+    _re.IGNORECASE,
+)
+
+_CONTACT_PATTERNS = _re.compile(
+    r"(?:(?:расскажи|инфо|информаци)\s+(?:про|о|об)\s+@\w|"
+    r"кто\s+тако[йе]\s+@\w|"
+    r"стати?стик[аиу]\s+@\w|"
+    r"@\w+\s+(?:кто|инфо|стат))",
+    _re.IGNORECASE,
+)
+
+_AUTOREPLY_PATTERNS = _re.compile(
+    r"(?:(?:включи|выключи|убери|установи|поставь)\s+автоответ|"
+    r"автоответ\s+(?:вкл|выкл|on|off)|"
+    r"автоответчик)",
+    _re.IGNORECASE,
+)
+
+_QR_PATTERNS = _re.compile(
+    r"(?:быстры[йе]\s+ответ|шаблон\s+ответ|"
+    r"сохрани\s+(?:быстрый\s+)?ответ|"
+    r"(?:мои|покажи|список)\s+(?:шаблон|быстр))",
+    _re.IGNORECASE,
+)
+
 
 def classify_intent(message: str) -> str:
     text = message.strip()
     if _DIALOG_PATTERNS.search(text):
         return "DIALOG_READ"
+    if _AUTOREPLY_PATTERNS.search(text):
+        return "AUTOREPLY"
+    if _NOTE_PATTERNS.search(text):
+        return "NOTE"
+    if _BROADCAST_PATTERNS.search(text):
+        return "BROADCAST"
+    if _CONTACT_PATTERNS.search(text):
+        return "CONTACT_INFO"
+    if _QR_PATTERNS.search(text):
+        return "QUICK_REPLY"
     if _SCHEDULE_PATTERNS.search(text):
         return "SCHEDULE_MESSAGE"
     if _SEND_PATTERNS.search(text):

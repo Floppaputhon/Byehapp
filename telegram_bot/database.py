@@ -72,11 +72,34 @@ async def init_db() -> None:
                 is_sent INTEGER DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS autoreply (
+                owner_id INTEGER PRIMARY KEY,
+                is_enabled INTEGER DEFAULT 0,
+                message TEXT DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS quick_replies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(owner_id, name)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
             CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(is_deleted);
             CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders(remind_at);
             CREATE INDEX IF NOT EXISTS idx_pending ON pending_replies(is_answered);
             CREATE INDEX IF NOT EXISTS idx_scheduled ON scheduled_messages(send_at);
+            CREATE INDEX IF NOT EXISTS idx_notes_owner ON notes(owner_id);
         """)
         await db.commit()
 
@@ -389,3 +412,180 @@ async def save_business_connection(
             (connection_id, user_id, user_chat_id, date, can_reply),
         )
         await db.commit()
+
+
+# ── Notes ────────────────────────────────────────────────────────────
+
+
+async def add_note(owner_id: int, text: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cursor = await conn.execute(
+            "INSERT INTO notes (owner_id, text) VALUES (?, ?)",
+            (owner_id, text),
+        )
+        await conn.commit()
+        return cursor.lastrowid
+
+
+async def get_notes(owner_id: int, limit: int = 30) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM notes WHERE owner_id = ? ORDER BY created_at DESC LIMIT ?",
+            (owner_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def delete_note(owner_id: int, note_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cursor = await conn.execute(
+            "DELETE FROM notes WHERE id = ? AND owner_id = ?",
+            (note_id, owner_id),
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+
+
+async def search_notes(owner_id: int, query: str) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM notes WHERE owner_id = ? AND text LIKE ? "
+            "ORDER BY created_at DESC LIMIT 20",
+            (owner_id, f"%{query}%"),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+# ── Auto-reply ───────────────────────────────────────────────────────
+
+
+async def set_autoreply(owner_id: int, is_enabled: int, message: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "INSERT OR REPLACE INTO autoreply (owner_id, is_enabled, message) "
+            "VALUES (?, ?, ?)",
+            (owner_id, is_enabled, message),
+        )
+        await conn.commit()
+
+
+async def get_autoreply(owner_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM autoreply WHERE owner_id = ? AND is_enabled = 1",
+            (owner_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+# ── Quick replies ────────────────────────────────────────────────────
+
+
+async def save_quick_reply(owner_id: int, name: str, text: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "INSERT OR REPLACE INTO quick_replies (owner_id, name, text) "
+            "VALUES (?, ?, ?)",
+            (owner_id, name, text),
+        )
+        await conn.commit()
+
+
+async def get_quick_replies(owner_id: int) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM quick_replies WHERE owner_id = ? ORDER BY name",
+            (owner_id,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_quick_reply(owner_id: int, name: str) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM quick_replies WHERE owner_id = ? AND name = ? COLLATE NOCASE",
+            (owner_id, name),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def delete_quick_reply(owner_id: int, name: str) -> bool:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cursor = await conn.execute(
+            "DELETE FROM quick_replies WHERE owner_id = ? AND name = ? COLLATE NOCASE",
+            (owner_id, name),
+        )
+        await conn.commit()
+        return cursor.rowcount > 0
+
+
+# ── Contact info ─────────────────────────────────────────────────────
+
+
+async def get_contact_stats(username: str) -> dict | None:
+    clean = username.lstrip("@")
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """SELECT
+                username, first_name, user_id, chat_id,
+                COUNT(*) as total_messages,
+                SUM(CASE WHEN media_type IS NOT NULL THEN 1 ELSE 0 END) as media_count,
+                SUM(CASE WHEN is_deleted = 1 THEN 1 ELSE 0 END) as deleted_count,
+                MIN(date) as first_seen,
+                MAX(date) as last_seen
+            FROM messages
+            WHERE username = ? COLLATE NOCASE
+            GROUP BY username""",
+            (clean,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_all_business_chats() -> list[dict]:
+    """Get all unique chats with business connections for broadcast."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            """SELECT DISTINCT m.chat_id, m.first_name, m.username, m.user_id,
+                bc.connection_id
+            FROM messages m
+            JOIN business_connections bc
+                ON m.business_connection_id = bc.connection_id
+            WHERE m.user_id IS NOT NULL
+            AND bc.can_reply = 1 AND bc.is_enabled = 1
+            GROUP BY m.chat_id
+            ORDER BY MAX(m.date) DESC"""
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def export_chat_messages(
+    chat_id: int | None = None, limit: int = 500
+) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        if chat_id:
+            cursor = await conn.execute(
+                "SELECT * FROM messages WHERE chat_id = ? ORDER BY date ASC LIMIT ?",
+                (chat_id, limit),
+            )
+        else:
+            cursor = await conn.execute(
+                "SELECT * FROM messages ORDER BY date ASC LIMIT ?",
+                (limit,),
+            )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]

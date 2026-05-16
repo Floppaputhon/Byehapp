@@ -72,6 +72,12 @@ def main() -> None:
     app.add_handler(CommandHandler("translate", handlers.cmd_translate))
     app.add_handler(CommandHandler("analyze", handlers.cmd_analyze))
     app.add_handler(CommandHandler("myreminders", handlers.cmd_myreminders))
+    app.add_handler(CommandHandler("autoreply", handlers.cmd_autoreply))
+    app.add_handler(CommandHandler("note", handlers.cmd_note))
+    app.add_handler(CommandHandler("broadcast", handlers.cmd_broadcast))
+    app.add_handler(CommandHandler("contact", handlers.cmd_contact))
+    app.add_handler(CommandHandler("export", handlers.cmd_export))
+    app.add_handler(CommandHandler("qr", handlers.cmd_qr))
 
     # Free-form AI Q&A — must be AFTER command handlers
     app.add_handler(

@@ -140,6 +140,18 @@ async def handle_business_message(
             text=(msg.text or msg.caption or f"[{MEDIA_LABELS.get(media_type, 'медиа')}]")[:200],
             date=msg.date.isoformat() if msg.date else datetime.datetime.now().isoformat(),
         )
+        ar = await db.get_autoreply(OWNER_ID)
+        if ar and ar.get("message"):
+            bc_id = getattr(msg, "business_connection_id", None)
+            if bc_id:
+                try:
+                    await context.bot.send_message(
+                        chat_id=msg.chat.id,
+                        text=ar["message"],
+                        business_connection_id=bc_id,
+                    )
+                except Exception:
+                    pass
 
     if user and user.id == OWNER_ID:
         await db.mark_replied_in_chat(msg.chat.id)
@@ -253,7 +265,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "- Отслеживаю удалённые сообщения (текст, фото, видео)\n"
         "- Делаю AI-пересказы переписок\n"
         "- Напоминаю кому ответить/позвонить\n"
-        "- Статистика, поиск, перевод и анализ\n\n"
+        "- Статистика, поиск, перевод и анализ\n"
+        "- Автоответы, заметки, рассылка, шаблоны\n\n"
         "<b>Команды:</b>\n"
         "/deleted — удалённые сообщения\n"
         "/summary — AI-пересказ чата\n"
@@ -264,7 +277,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/translate — перевод текста\n"
         "/analyze — анализ сообщения\n"
         "/myreminders — мои напоминания\n"
+        "/autoreply — автоответ на входящие\n"
+        "/note — заметки\n"
+        "/broadcast — рассылка всем контактам\n"
+        "/contact — инфо о контакте\n"
+        "/export — экспорт истории чата\n"
+        "/qr — быстрые ответы (шаблоны)\n"
         "/help — справка\n\n"
+        "Также можешь просто писать мне — я пойму!\n"
         "Подключи меня как бизнес-бота в настройках Telegram!"
     )
     await _safe_reply(update.message, text, parse_mode="HTML")
@@ -273,23 +293,33 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "<b>Справка по командам:</b>\n\n"
-        "/deleted [кол-во] — показать удалённые сообщения\n"
-        "  <i>Пример: /deleted 10</i>\n\n"
+        "/deleted [кол-во] — удалённые сообщения\n"
         "/summary [часы] — AI-пересказ за N часов\n"
-        "  <i>Пример: /summary 12</i>\n\n"
         "/remind [кому] [что] [когда] — напоминание\n"
-        "  <i>Пример: /remind @ivan позвонить 18:00</i>\n"
-        "  <i>Пример: /remind мама перезвонить 30м</i>\n\n"
-        "/pending — кому нужно ответить\n\n"
-        "/stats [часы] — статистика за N часов\n"
-        "  <i>Пример: /stats 48</i>\n\n"
+        "/pending — кому нужно ответить\n"
+        "/stats [часы] — статистика\n"
         "/search [запрос] — поиск по сообщениям\n"
-        "  <i>Пример: /search встреча завтра</i>\n\n"
-        "/translate [текст] — перевод на русский\n"
-        "  <i>Также можно ответить на сообщение</i>\n\n"
+        "/translate [текст] — перевод\n"
         "/analyze — анализ тона сообщения\n"
-        "  <i>Ответь на сообщение этой командой</i>\n\n"
-        "/myreminders — список активных напоминаний\n"
+        "/myreminders — мои напоминания\n\n"
+        "<b>Новые инструменты:</b>\n\n"
+        "/autoreply on [текст] — включить автоответ\n"
+        "/autoreply off — выключить автоответ\n\n"
+        "/note save [текст] — сохранить заметку\n"
+        "/note list — список заметок\n"
+        "/note delete [id] — удалить заметку\n"
+        "/note search [запрос] — найти заметку\n\n"
+        "/broadcast [текст] — рассылка всем контактам\n\n"
+        "/contact @username — инфо о контакте\n\n"
+        "/export [@username] — экспорт чата\n\n"
+        "/qr save [имя] [текст] — шаблон ответа\n"
+        "/qr list — список шаблонов\n"
+        "/qr use [имя] — показать шаблон\n\n"
+        "<b>Также можно писать обычным текстом:</b>\n"
+        "• \"Запомни купить молоко\" → заметка\n"
+        "• \"Напиши всем привет\" → рассылка\n"
+        "• \"Расскажи про @ivan\" → инфо\n"
+        "• \"Включи автоответ Я занят\" → автоответ\n"
     )
     await _safe_reply(update.message, text, parse_mode="HTML")
 
@@ -558,6 +588,293 @@ async def cmd_myreminders(
     await _safe_reply(update.message, text, parse_mode="HTML")
 
 
+# ── Auto-reply command ───────────────────────────────────────────────
+
+
+async def cmd_autoreply(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if not context.args:
+        ar = await db.get_autoreply(OWNER_ID)
+        if ar:
+            await update.message.reply_text(
+                f"<b>Автоответ включён</b>\n\nСообщение: {ar['message']}",
+                parse_mode="HTML",
+            )
+        else:
+            await update.message.reply_text(
+                "<b>Автоответ выключен</b>\n\n"
+                "Включить: /autoreply on Я сейчас занят\n"
+                "Выключить: /autoreply off",
+                parse_mode="HTML",
+            )
+        return
+
+    action = context.args[0].lower()
+
+    if action == "off":
+        await db.set_autoreply(OWNER_ID, 0, "")
+        await update.message.reply_text("Автоответ выключен.")
+        return
+
+    if action == "on":
+        message = " ".join(context.args[1:]) if len(context.args) > 1 else "Я сейчас занят, отвечу позже."
+        await db.set_autoreply(OWNER_ID, 1, message)
+        await update.message.reply_text(
+            f"<b>Автоответ включён!</b>\n\nСообщение: {message}",
+            parse_mode="HTML",
+        )
+        return
+
+    message = " ".join(context.args)
+    await db.set_autoreply(OWNER_ID, 1, message)
+    await update.message.reply_text(
+        f"<b>Автоответ включён!</b>\n\nСообщение: {message}",
+        parse_mode="HTML",
+    )
+
+
+# ── Notes command ────────────────────────────────────────────────────
+
+
+async def cmd_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text(
+            "<b>Заметки:</b>\n\n"
+            "/note save [текст] — сохранить заметку\n"
+            "/note list — список заметок\n"
+            "/note delete [id] — удалить заметку\n"
+            "/note search [запрос] — найти заметку",
+            parse_mode="HTML",
+        )
+        return
+
+    action = context.args[0].lower()
+
+    if action == "save" and len(context.args) > 1:
+        text = " ".join(context.args[1:])
+        note_id = await db.add_note(OWNER_ID, text)
+        await update.message.reply_text(
+            f"Заметка #{note_id} сохранена!",
+        )
+    elif action == "list":
+        notes = await db.get_notes(OWNER_ID)
+        if not notes:
+            await update.message.reply_text("Заметок пока нет.")
+            return
+        text = "<b>Мои заметки:</b>\n\n"
+        for n in notes:
+            date_str = (n.get("created_at") or "")[:16].replace("T", " ")
+            text += f"<b>#{n['id']}</b> ({date_str})\n{n['text'][:200]}\n\n"
+        await _safe_reply(update.message, text, parse_mode="HTML")
+    elif action == "delete" and len(context.args) > 1:
+        try:
+            note_id = int(context.args[1])
+        except ValueError:
+            await update.message.reply_text("Укажи номер заметки: /note delete 5")
+            return
+        deleted = await db.delete_note(OWNER_ID, note_id)
+        if deleted:
+            await update.message.reply_text(f"Заметка #{note_id} удалена.")
+        else:
+            await update.message.reply_text(f"Заметка #{note_id} не найдена.")
+    elif action == "search" and len(context.args) > 1:
+        query = " ".join(context.args[1:])
+        notes = await db.search_notes(OWNER_ID, query)
+        if not notes:
+            await update.message.reply_text(f'По запросу "{query}" заметок не найдено.')
+            return
+        text = f'<b>Заметки по "{query}":</b>\n\n'
+        for n in notes:
+            date_str = (n.get("created_at") or "")[:16].replace("T", " ")
+            text += f"<b>#{n['id']}</b> ({date_str})\n{n['text'][:200]}\n\n"
+        await _safe_reply(update.message, text, parse_mode="HTML")
+    else:
+        await update.message.reply_text(
+            "Использование: /note save|list|delete|search [аргумент]"
+        )
+
+
+# ── Broadcast command ────────────────────────────────────────────────
+
+
+async def cmd_broadcast(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if not context.args:
+        await update.message.reply_text(
+            "<b>Рассылка:</b>\n/broadcast [текст]\n\n"
+            "Отправит сообщение всем контактам через Business API.",
+            parse_mode="HTML",
+        )
+        return
+
+    text = " ".join(context.args)
+    chats = await db.get_all_business_chats()
+
+    if not chats:
+        await update.message.reply_text(
+            "Нет доступных бизнес-чатов для рассылки."
+        )
+        return
+
+    filtered = [c for c in chats if c.get("user_id") != OWNER_ID]
+    if not filtered:
+        await update.message.reply_text("Нет контактов для рассылки (кроме себя).")
+        return
+
+    status = await update.message.reply_text(
+        f"Рассылка: 0/{len(filtered)} отправлено..."
+    )
+    sent = 0
+    errors = 0
+    for c in filtered:
+        try:
+            await context.bot.send_message(
+                chat_id=c["chat_id"],
+                text=text,
+                business_connection_id=c["connection_id"],
+            )
+            sent += 1
+        except Exception:
+            errors += 1
+
+    result = f"<b>Рассылка завершена!</b>\n\nОтправлено: {sent}\n"
+    if errors:
+        result += f"Ошибок: {errors}\n"
+    result += f"\nТекст: {text}"
+    await status.edit_text(result, parse_mode="HTML")
+
+
+# ── Contact info command ─────────────────────────────────────────────
+
+
+async def cmd_contact(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    if not context.args:
+        await update.message.reply_text(
+            "Использование: /contact @username"
+        )
+        return
+
+    username = context.args[0].lstrip("@")
+    stats = await db.get_contact_stats(username)
+
+    if not stats:
+        await update.message.reply_text(f"Контакт @{username} не найден в базе.")
+        return
+
+    first_seen = (stats.get("first_seen") or "")[:16].replace("T", " ")
+    last_seen = (stats.get("last_seen") or "")[:16].replace("T", " ")
+    name = stats.get("first_name") or "Неизвестный"
+
+    text = (
+        f"<b>Контакт: {name} (@{username})</b>\n\n"
+        f"Всего сообщений: {stats['total_messages']}\n"
+        f"Медиа: {stats['media_count']}\n"
+        f"Удалённых: {stats['deleted_count']}\n"
+        f"Первое сообщение: {first_seen}\n"
+        f"Последнее: {last_seen}"
+    )
+    await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+# ── Export command ────────────────────────────────────────────────────
+
+
+async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = None
+    if context.args:
+        username = context.args[0].lstrip("@")
+        contact = await db.find_chat_by_username(username)
+        if contact:
+            chat_id = contact["chat_id"]
+
+    messages = await db.export_chat_messages(chat_id=chat_id, limit=500)
+
+    if not messages:
+        await update.message.reply_text("Нет сообщений для экспорта.")
+        return
+
+    lines = []
+    for msg in messages:
+        name = msg.get("first_name") or "Неизвестный"
+        username_str = f" (@{msg['username']})" if msg.get("username") else ""
+        date_str = (msg.get("date") or "")[:19].replace("T", " ")
+        content = msg.get("text") or msg.get("caption") or f"[{msg.get('media_type', 'медиа')}]"
+        deleted = " [УДАЛЕНО]" if msg.get("is_deleted") else ""
+        lines.append(f"[{date_str}] {name}{username_str}{deleted}: {content}")
+
+    export_text = "\n".join(lines)
+    if len(export_text) > MAX_TG_MSG_LEN * 3:
+        chunks = []
+        current = "<b>Экспорт сообщений:</b>\n\n<pre>"
+        for line in lines:
+            if len(current) + len(line) + 10 > MAX_TG_MSG_LEN:
+                chunks.append(current + "</pre>")
+                current = "<pre>"
+            current += line + "\n"
+        if current != "<pre>":
+            chunks.append(current + "</pre>")
+        for chunk in chunks:
+            await _safe_reply(update.message, chunk, parse_mode="HTML")
+    else:
+        text = f"<b>Экспорт ({len(messages)} сообщений):</b>\n\n<pre>{export_text}</pre>"
+        await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+# ── Quick replies command ────────────────────────────────────────────
+
+
+async def cmd_qr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not context.args:
+        await update.message.reply_text(
+            "<b>Быстрые ответы:</b>\n\n"
+            "/qr save [имя] [текст] — сохранить шаблон\n"
+            "/qr list — список шаблонов\n"
+            "/qr use [имя] — показать текст шаблона\n"
+            "/qr delete [имя] — удалить шаблон",
+            parse_mode="HTML",
+        )
+        return
+
+    action = context.args[0].lower()
+
+    if action == "save" and len(context.args) > 2:
+        name = context.args[1]
+        text = " ".join(context.args[2:])
+        await db.save_quick_reply(OWNER_ID, name, text)
+        await update.message.reply_text(f"Шаблон «{name}» сохранён!")
+    elif action == "list":
+        qrs = await db.get_quick_replies(OWNER_ID)
+        if not qrs:
+            await update.message.reply_text("Шаблонов пока нет.")
+            return
+        text = "<b>Быстрые ответы:</b>\n\n"
+        for q in qrs:
+            text += f"<b>{q['name']}</b>: {q['text'][:100]}\n"
+        await _safe_reply(update.message, text, parse_mode="HTML")
+    elif action == "use" and len(context.args) > 1:
+        name = context.args[1]
+        qr = await db.get_quick_reply(OWNER_ID, name)
+        if qr:
+            await update.message.reply_text(qr["text"])
+        else:
+            await update.message.reply_text(f"Шаблон «{name}» не найден.")
+    elif action == "delete" and len(context.args) > 1:
+        name = context.args[1]
+        deleted = await db.delete_quick_reply(OWNER_ID, name)
+        if deleted:
+            await update.message.reply_text(f"Шаблон «{name}» удалён.")
+        else:
+            await update.message.reply_text(f"Шаблон «{name}» не найден.")
+    else:
+        await update.message.reply_text(
+            "Использование: /qr save|list|use|delete [аргумент]"
+        )
+
+
 # ── Free-form AI Q&A handler ─────────────────────────────────────────
 
 
@@ -583,6 +900,16 @@ async def handle_direct_question(
         await _handle_message_send(msg, context, chat_id)
     elif intent == "SCHEDULE_MESSAGE":
         await _handle_schedule_message(msg, context, chat_id)
+    elif intent == "BROADCAST":
+        await _handle_broadcast_nl(msg, context, chat_id)
+    elif intent == "NOTE":
+        await _handle_note_nl(msg, chat_id)
+    elif intent == "CONTACT_INFO":
+        await _handle_contact_nl(msg, chat_id)
+    elif intent == "AUTOREPLY":
+        await _handle_autoreply_nl(msg, chat_id)
+    elif intent == "QUICK_REPLY":
+        await _handle_qr_nl(msg, chat_id)
     else:
         history = _get_history(chat_id)
         answer = await ai_client.answer_question(msg.text, history=history[:-1])
@@ -822,6 +1149,210 @@ async def _handle_schedule_message(
         f"Запланировано: {composed}\n"
         f"Получатель: {chat_name}\n"
         f"Время: {send_at.strftime('%d.%m.%Y %H:%M')}"
+    )
+
+
+# ── Natural language handlers for new tools ──────────────────────────
+
+
+async def _handle_note_nl(msg, chat_id: int) -> None:
+    """Handle note-related requests from natural language."""
+    text = msg.text.lower()
+    status_msg = await msg.reply_text("Заметки\nTools:\n  Notes_manager")
+
+    if re.search(r"удали\s+заметк", text, re.IGNORECASE):
+        m = re.search(r"#?(\d+)", msg.text)
+        if m:
+            note_id = int(m.group(1))
+            deleted = await db.delete_note(OWNER_ID, note_id)
+            result = f"Заметка #{note_id} удалена." if deleted else f"Заметка #{note_id} не найдена."
+        else:
+            result = "Укажи номер заметки для удаления, например: удали заметку #5"
+        _add_to_history(chat_id, "assistant", result)
+        await status_msg.edit_text(
+            "Заметки\nTools:\n  Notes_manager ✓\n\n" + result
+        )
+        return
+
+    if re.search(r"(?:мои|покажи|список)\s+заметк|что\s+(?:я\s+)?записывал", text, re.IGNORECASE):
+        notes = await db.get_notes(OWNER_ID)
+        if not notes:
+            result = "Заметок пока нет."
+        else:
+            lines = []
+            for n in notes:
+                date_str = (n.get("created_at") or "")[:16].replace("T", " ")
+                lines.append(f"#{n['id']} ({date_str}): {n['text'][:100]}")
+            result = "Твои заметки:\n" + "\n".join(lines)
+        _add_to_history(chat_id, "assistant", result)
+        await status_msg.edit_text(
+            f"Заметки\nTools:\n  Notes_manager — {len(notes) if notes else 0} заметок ✓\n\n{result}"
+        )
+        return
+
+    raw = msg.text
+    clean = re.sub(
+        r"^(?:запомни|запиши|сохрани\s+(?:заметку|запись))\s*(?:что\s+)?",
+        "", raw, flags=re.IGNORECASE,
+    ).strip()
+    if not clean:
+        clean = raw
+    note_id = await db.add_note(OWNER_ID, clean)
+    result = f"Заметка #{note_id} сохранена: {clean}"
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        f"Заметки\nTools:\n  Notes_save ✓\n\n{result}"
+    )
+
+
+async def _handle_broadcast_nl(
+    msg, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+) -> None:
+    """Handle broadcast requests from natural language."""
+    status_msg = await msg.reply_text(
+        "Рассылка\nTools:\n  Compose_message"
+    )
+
+    composed = await ai_client.compose_message(msg.text)
+
+    await status_msg.edit_text(
+        "Рассылка\nTools:\n  Compose_message ✓\n  Broadcast_send"
+    )
+
+    chats = await db.get_all_business_chats()
+    filtered = [c for c in chats if c.get("user_id") != OWNER_ID]
+
+    if not filtered:
+        _add_to_history(chat_id, "assistant", "Нет контактов для рассылки.")
+        await status_msg.edit_text(
+            "Рассылка\nTools:\n  Compose_message ✓\n"
+            "  Broadcast_send — нет контактов\n\n"
+            "Нет доступных бизнес-контактов для рассылки."
+        )
+        return
+
+    sent = 0
+    for c in filtered:
+        try:
+            await context.bot.send_message(
+                chat_id=c["chat_id"],
+                text=composed,
+                business_connection_id=c["connection_id"],
+            )
+            sent += 1
+        except Exception:
+            pass
+
+    result = f"Отправлено {sent}/{len(filtered)} контактам: {composed}"
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        "Рассылка\nTools:\n  Compose_message ✓\n"
+        f"  Broadcast_send ✓ → {sent}/{len(filtered)}\n\n"
+        f"Текст: {composed}"
+    )
+
+
+async def _handle_contact_nl(msg, chat_id: int) -> None:
+    """Handle contact info requests from natural language."""
+    status_msg = await msg.reply_text(
+        "Информация о контакте\nTools:\n  Contact_lookup"
+    )
+
+    username = _extract_username(msg.text)
+    if not username:
+        _add_to_history(chat_id, "assistant", "Укажи @username контакта.")
+        await status_msg.edit_text(
+            "Информация о контакте\nTools:\n  Contact_lookup — не указан @username\n\n"
+            "Укажи @username, например: расскажи про @ivan"
+        )
+        return
+
+    stats = await db.get_contact_stats(username)
+    if not stats:
+        _add_to_history(chat_id, "assistant", f"Контакт @{username} не найден.")
+        await status_msg.edit_text(
+            "Информация о контакте\nTools:\n"
+            f"  Contact_lookup — @{username} не найден\n\n"
+            f"Контакт @{username} пока не встречался в чатах."
+        )
+        return
+
+    name = stats.get("first_name") or "Неизвестный"
+    first_seen = (stats.get("first_seen") or "")[:16].replace("T", " ")
+    last_seen = (stats.get("last_seen") or "")[:16].replace("T", " ")
+    result = (
+        f"{name} (@{username})\n"
+        f"Сообщений: {stats['total_messages']}, "
+        f"медиа: {stats['media_count']}, "
+        f"удалённых: {stats['deleted_count']}\n"
+        f"Первое: {first_seen}, последнее: {last_seen}"
+    )
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        "Информация о контакте\nTools:\n"
+        f"  Contact_lookup → @{username} ✓\n\n{result}"
+    )
+
+
+async def _handle_autoreply_nl(msg, chat_id: int) -> None:
+    """Handle autoreply toggle from natural language."""
+    text = msg.text.lower()
+    status_msg = await msg.reply_text(
+        "Автоответ\nTools:\n  Autoreply_config"
+    )
+
+    if re.search(r"(?:выключи|убери|отключи|off|выкл)", text, re.IGNORECASE):
+        await db.set_autoreply(OWNER_ID, 0, "")
+        result = "Автоответ выключен."
+        _add_to_history(chat_id, "assistant", result)
+        await status_msg.edit_text(
+            "Автоответ\nTools:\n  Autoreply_config ✓\n\n" + result
+        )
+        return
+
+    ar_text = re.sub(
+        r"^(?:включи|установи|поставь|установить)\s+автоответ\s*(?:на\s*)?",
+        "", msg.text, flags=re.IGNORECASE,
+    ).strip()
+    if not ar_text or ar_text.lower() == msg.text.lower():
+        ar_text = "Я сейчас занят, отвечу позже."
+
+    await db.set_autoreply(OWNER_ID, 1, ar_text)
+    result = f"Автоответ включён: {ar_text}"
+    _add_to_history(chat_id, "assistant", result)
+    await status_msg.edit_text(
+        "Автоответ\nTools:\n  Autoreply_config ✓\n\n" + result
+    )
+
+
+async def _handle_qr_nl(msg, chat_id: int) -> None:
+    """Handle quick reply requests from natural language."""
+    text = msg.text.lower()
+    status_msg = await msg.reply_text(
+        "Быстрые ответы\nTools:\n  QuickReply_manager"
+    )
+
+    if re.search(r"(?:мои|покажи|список)\s+(?:шаблон|быстр)", text, re.IGNORECASE):
+        qrs = await db.get_quick_replies(OWNER_ID)
+        if not qrs:
+            result = "Шаблонов пока нет. Создай: /qr save имя текст"
+        else:
+            lines = [f"• {q['name']}: {q['text'][:80]}" for q in qrs]
+            result = "Твои шаблоны:\n" + "\n".join(lines)
+        _add_to_history(chat_id, "assistant", result)
+        await status_msg.edit_text(
+            "Быстрые ответы\nTools:\n  QuickReply_manager ✓\n\n" + result
+        )
+        return
+
+    _add_to_history(chat_id, "assistant", "Используй /qr save|list|use|delete")
+    await status_msg.edit_text(
+        "Быстрые ответы\nTools:\n  QuickReply_manager ✓\n\n"
+        "Команды:\n"
+        "/qr save [имя] [текст]\n"
+        "/qr list\n"
+        "/qr use [имя]\n"
+        "/qr delete [имя]"
     )
 
 
