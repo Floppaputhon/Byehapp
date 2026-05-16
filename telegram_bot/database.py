@@ -94,6 +94,12 @@ async def init_db() -> None:
                 UNIQUE(owner_id, name)
             );
 
+            CREATE TABLE IF NOT EXISTS known_groups (
+                chat_id INTEGER PRIMARY KEY,
+                title TEXT DEFAULT '',
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
             CREATE TABLE IF NOT EXISTS moderation (
                 chat_id INTEGER PRIMARY KEY,
                 is_enabled INTEGER DEFAULT 0,
@@ -638,9 +644,28 @@ async def export_chat_messages(
         return [dict(r) for r in rows]
 
 
+async def upsert_known_group(chat_id: int, title: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "INSERT INTO known_groups (chat_id, title, updated_at) "
+            "VALUES (?, ?, datetime('now')) "
+            "ON CONFLICT(chat_id) DO UPDATE SET title=excluded.title, "
+            "updated_at=excluded.updated_at",
+            (chat_id, title),
+        )
+        await conn.commit()
+
+
 async def get_known_group_chats() -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT chat_id, title AS first_name FROM known_groups "
+            "ORDER BY updated_at DESC LIMIT 20"
+        )
+        rows = await cursor.fetchall()
+        if rows:
+            return [dict(r) for r in rows]
         cursor = await conn.execute(
             "SELECT DISTINCT chat_id, first_name "
             "FROM messages WHERE business_connection_id IS NULL "

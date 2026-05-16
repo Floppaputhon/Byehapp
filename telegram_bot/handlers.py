@@ -1168,11 +1168,13 @@ async def _handle_message_send(
 
     target_username = _extract_username(msg.text)
     target_chat = None
+    group_candidates = []
 
     if is_group_target:
         groups = await db.get_known_group_chats()
         if groups:
             target_chat = groups[0]
+            group_candidates = groups
 
     if not target_chat and target_username:
         target_chat = await db.find_chat_by_username(target_username)
@@ -1214,15 +1216,32 @@ async def _handle_message_send(
             )
             return
 
-    try:
-        if is_group:
-            await context.bot.send_message(chat_id=send_chat_id, text=composed)
-        else:
+    sent = False
+    last_err = None
+    if is_group:
+        candidates = [target_chat] + [g for g in group_candidates if g["chat_id"] != send_chat_id]
+        for candidate in candidates:
+            try:
+                await context.bot.send_message(chat_id=candidate["chat_id"], text=composed)
+                chat_name = candidate.get("first_name") or str(candidate["chat_id"])
+                send_chat_id = candidate["chat_id"]
+                sent = True
+                break
+            except Exception as e:
+                last_err = e
+                continue
+    else:
+        try:
             await context.bot.send_message(
                 chat_id=send_chat_id,
                 text=composed,
                 business_connection_id=bc["connection_id"],
             )
+            sent = True
+        except Exception as e:
+            last_err = e
+
+    if sent:
         _add_to_history(chat_id, "assistant", f"Отправлено {chat_name}: {composed}")
         await status_msg.edit_text(
             "Отправляю сообщение\n"
@@ -1231,13 +1250,16 @@ async def _handle_message_send(
             f"  Message_send ✓\n\n"
             f"Отправлено: {composed}"
         )
-    except Exception as e:
-        _add_to_history(chat_id, "assistant", f"Ошибка отправки: {e}")
+    else:
+        _add_to_history(chat_id, "assistant", f"Ошибка отправки: {last_err}")
+        hint = ""
+        if is_group and "not a member" in str(last_err):
+            hint = "\n\nБот не является участником группы. Добавь бота в группу как участника."
         await status_msg.edit_text(
             "Отправляю сообщение\n"
             "Tools:\n  Compose_message ✓\n"
             f"  Chat_lookup → {chat_name} ✓\n"
-            f"  Message_send — ошибка: {e}\n\n"
+            f"  Message_send — ошибка: {last_err}{hint}\n\n"
             f"Текст: {composed}"
         )
 
@@ -1914,6 +1936,9 @@ async def handle_group_message(
     msg = update.message
     if not msg:
         return
+
+    if msg.chat.title:
+        await db.upsert_known_group(msg.chat.id, msg.chat.title)
 
     blocked = await _check_moderation(update, context)
     if blocked:
