@@ -54,7 +54,10 @@ async def _safe_reply(message, text: str, **kwargs) -> None:
     while text:
         chunk = text[:MAX_TG_MSG_LEN]
         text = text[MAX_TG_MSG_LEN:]
-        await message.reply_text(chunk, **kwargs)
+        try:
+            await message.reply_text(chunk, **kwargs)
+        except Exception:
+            await message.reply_text(chunk)
 
 
 MEDIA_LABELS = {
@@ -579,7 +582,7 @@ async def handle_direct_question(
     elif intent == "MESSAGE_SEND":
         await _handle_message_send(msg, context, chat_id)
     elif intent == "SCHEDULE_MESSAGE":
-        await _handle_schedule_message(msg, update)
+        await _handle_schedule_message(msg, context, chat_id)
     else:
         history = _get_history(chat_id)
         answer = await ai_client.answer_question(msg.text, history=history[:-1])
@@ -714,7 +717,9 @@ async def _handle_message_send(
         )
 
 
-async def _handle_schedule_message(msg, update: Update) -> None:
+async def _handle_schedule_message(
+    msg, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+) -> None:
     status_msg = await msg.reply_text(
         "Планирую сообщение\n"
         "Tools:\n  Parse_time"
@@ -752,27 +757,70 @@ async def _handle_schedule_message(msg, update: Update) -> None:
         "Планирую сообщение\n"
         "Tools:\n  Parse_time ✓\n"
         "  Compose_message ✓\n"
-        "  Schedule_message"
+        "  Chat_lookup"
     )
 
-    chats = await db.get_known_chats()
-    target_chat_id = chats[0]["chat_id"] if chats else update.effective_chat.id
-    bc = await db.get_business_connection_for_chat(target_chat_id) if chats else None
+    target_username = _extract_username(msg.text)
+    target_chat = None
+    if target_username:
+        target_chat = await db.find_chat_by_username(target_username)
+
+    if not target_chat:
+        chats = await db.get_known_chats()
+        for c in chats:
+            if c["chat_id"] != chat_id and c.get("user_id") != OWNER_ID:
+                target_chat = c
+                break
+
+    if not target_chat:
+        bc = await db.get_any_business_connection()
+        if not bc:
+            _add_to_history(chat_id, "assistant", f"Нет бизнес-подключения. Текст: {composed}")
+            await status_msg.edit_text(
+                "Планирую сообщение\n"
+                "Tools:\n  Parse_time ✓\n"
+                "  Compose_message ✓\n"
+                "  Chat_lookup — нет бизнес-подключения\n\n"
+                "Подключи бота как бизнес-бота в настройках Telegram."
+            )
+            return
+        target_label = f"@{target_username}" if target_username else "получатель"
+        _add_to_history(chat_id, "assistant", f"Не найден чат {target_label}. Текст: {composed}")
+        await status_msg.edit_text(
+            "Планирую сообщение\n"
+            "Tools:\n  Parse_time ✓\n"
+            "  Compose_message ✓\n"
+            f"  Chat_lookup — не найден чат {target_label}\n\n"
+            "Пользователь должен сначала написать тебе, чтобы бот увидел его через Business API."
+        )
+        return
+
+    target_chat_id = target_chat["chat_id"]
+    bc = await db.get_business_connection_for_chat(target_chat_id)
+    if not bc:
+        bc = await db.get_any_business_connection()
 
     await db.add_scheduled_message(
-        owner_id=update.effective_user.id,
+        owner_id=OWNER_ID,
         chat_id=target_chat_id,
         business_connection_id=bc["connection_id"] if bc else None,
         text=composed,
         send_at=send_at.isoformat(),
     )
 
+    chat_name = target_chat.get("first_name") or f"@{target_username or target_chat_id}"
+    _add_to_history(
+        chat_id, "assistant",
+        f"Запланировано для {chat_name} на {send_at.strftime('%d.%m %H:%M')}: {composed}",
+    )
     await status_msg.edit_text(
         "Планирую сообщение\n"
         "Tools:\n  Parse_time ✓\n"
         "  Compose_message ✓\n"
+        f"  Chat_lookup → {chat_name} ✓\n"
         f"  Schedule_message ✓ → {send_at.strftime('%d.%m %H:%M')}\n\n"
         f"Запланировано: {composed}\n"
+        f"Получатель: {chat_name}\n"
         f"Время: {send_at.strftime('%d.%m.%Y %H:%M')}"
     )
 
