@@ -79,6 +79,16 @@ def main() -> None:
     app.add_handler(CommandHandler("export", handlers.cmd_export))
     app.add_handler(CommandHandler("qr", handlers.cmd_qr))
     app.add_handler(CommandHandler("priority", handlers.cmd_priority))
+    app.add_handler(CommandHandler("whoami", handlers.cmd_whoami))
+    app.add_handler(CommandHandler("access", handlers.cmd_access))
+
+    # Photo message handler
+    app.add_handler(
+        MessageHandler(
+            filters.PHOTO & filters.ChatType.PRIVATE,
+            handlers.handle_photo_message,
+        )
+    )
 
     # Voice message handler
     app.add_handler(

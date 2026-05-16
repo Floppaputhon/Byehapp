@@ -1,5 +1,6 @@
 """AI client for vectorengine.ai (OpenAI-compatible API)."""
 
+import base64 as _b64
 import re as _re
 
 import aiohttp
@@ -246,11 +247,13 @@ def classify_intent(message: str) -> str:
 async def transcribe_voice(file_path: str) -> str:
     """Transcribe a voice file using OpenAI-compatible whisper API."""
     headers = {"Authorization": f"Bearer {AI_API_KEY}"}
+    fh = None
     try:
+        fh = open(file_path, "rb")  # noqa: SIM115
         data = aiohttp.FormData()
         data.add_field(
             "file",
-            open(file_path, "rb"),  # noqa: SIM115
+            fh,
             filename="voice.ogg",
             content_type="audio/ogg",
         )
@@ -271,6 +274,9 @@ async def transcribe_voice(file_path: str) -> str:
                         return text
     except Exception:
         pass
+    finally:
+        if fh:
+            fh.close()
 
     return await _google_transcribe(file_path)
 
@@ -394,6 +400,53 @@ async def rank_chat_priority(chats: list[dict]) -> str:
         "Формат:\n🔴 Имя — причина\n🟡 Имя — причина\n🟢 Имя — причина"
     )
     return await ai_chat(system_prompt, conversations, max_tokens=1500)
+
+
+async def describe_image(image_path: str, question: str = "") -> str:
+    """Describe an image using AI vision API."""
+    try:
+        with open(image_path, "rb") as f:
+            img_data = _b64.b64encode(f.read()).decode()
+    except Exception as e:
+        return f"Ошибка чтения файла: {e}"
+
+    user_text = question or "Опиши это изображение подробно."
+    headers = {
+        "Authorization": f"Bearer {AI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": AI_MODEL,
+        "messages": [
+            {"role": "system", "content": (
+                "Ты — AI-ассистент, который описывает изображения. "
+                "Отвечай подробно и полезно на русском."
+            )},
+            {"role": "user", "content": [
+                {"type": "text", "text": user_text},
+                {"type": "image_url", "image_url": {
+                    "url": f"data:image/jpeg;base64,{img_data}",
+                }},
+            ]},
+        ],
+        "max_tokens": 1000,
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{AI_API_URL}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=45),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data["choices"][0]["message"]["content"]
+                error_text = await resp.text()
+                return f"Ошибка AI Vision ({resp.status}): {error_text[:200]}"
+    except Exception as e:
+        return f"Ошибка подключения к AI: {e}"
 
 
 async def compose_message(request: str) -> str:

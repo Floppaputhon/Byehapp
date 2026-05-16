@@ -11,11 +11,59 @@ from telegram.ext import ContextTypes
 
 import database as db
 import ai_client
-from config import OWNER_ID
+from config import AUTH_PASSWORD, OWNER_ID
 
 _chat_history: dict[int, deque] = {}
 _MAX_HISTORY = 20
 _autoreply_sent: set[int] = set()
+_authenticated_users: set[int] = set()
+
+GROUP_ACCESS_OWNER = "owner"
+GROUP_ACCESS_ADMINS = "admins"
+GROUP_ACCESS_ALL = "all"
+_group_access_level: str = GROUP_ACCESS_ADMINS
+
+
+def _is_authenticated(user_id: int) -> bool:
+    if not AUTH_PASSWORD:
+        return True
+    if user_id == OWNER_ID:
+        return True
+    return user_id in _authenticated_users
+
+
+async def _check_auth(update: Update) -> bool:
+    """Check if user is authenticated. Returns True if OK, False if blocked."""
+    user = update.effective_user
+    if not user:
+        return False
+    if _is_authenticated(user.id):
+        return True
+    await update.message.reply_text(
+        "Введи пароль для доступа к боту:"
+    )
+    return False
+
+
+async def _check_group_access(update: Update) -> bool:
+    """Check if user has access in a group chat."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if not user or not chat:
+        return False
+    if chat.type == "private":
+        return _is_authenticated(user.id)
+    if user.id == OWNER_ID:
+        return True
+    if _group_access_level == GROUP_ACCESS_ALL:
+        return True
+    if _group_access_level == GROUP_ACCESS_ADMINS:
+        try:
+            member = await update.effective_chat.get_member(user.id)
+            return member.status in ("administrator", "creator")
+        except Exception:
+            return False
+    return False
 
 
 def _get_history(chat_id: int) -> list[dict]:
@@ -263,12 +311,21 @@ async def handle_deleted_business_messages(
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if AUTH_PASSWORD and user and not _is_authenticated(user.id):
+        await update.message.reply_text(
+            "Привет! Этот бот защищён паролем.\n"
+            "Введи пароль для доступа:"
+        )
+        return
     text = (
         "<b>Привет! Я твой бизнес-ассистент.</b>\n\n"
         "Что я умею:\n"
         "- Отслеживаю удалённые сообщения (текст, фото, видео)\n"
         "- Делаю AI-пересказы переписок\n"
         "- Напоминаю кому ответить/позвонить\n"
+        "- Приоритетный рейтинг чатов\n"
+        "- Распознаю фото и голосовые сообщения\n"
         "- Статистика, поиск, перевод и анализ\n"
         "- Автоответы, заметки, рассылка, шаблоны\n\n"
         "<b>Команды:</b>\n"
@@ -276,6 +333,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/summary — AI-пересказ чата\n"
         "/remind — установить напоминание\n"
         "/pending — кому нужно ответить\n"
+        "/priority — приоритет ответов\n"
         "/stats — статистика сообщений\n"
         "/search — поиск по сообщениям\n"
         "/translate — перевод текста\n"
@@ -287,48 +345,57 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/contact — инфо о контакте\n"
         "/export — экспорт истории чата\n"
         "/qr — быстрые ответы (шаблоны)\n"
+        "/access — настройка доступа в группах\n"
+        "/whoami — твой ID и инфо\n"
         "/help — справка\n\n"
         "Также можешь просто писать мне — я пойму!\n"
+        "Отправь фото — я опишу что на нём.\n"
         "Подключи меня как бизнес-бота в настройках Telegram!"
     )
     await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     text = (
         "<b>Справка по командам:</b>\n\n"
         "/deleted [кол-во] — удалённые сообщения\n"
         "/summary [часы] — AI-пересказ за N часов\n"
         "/remind [кому] [что] [когда] — напоминание\n"
         "/pending — кому нужно ответить\n"
+        "/priority — приоритет ответов (срочно/важно/не срочно)\n"
         "/stats [часы] — статистика\n"
         "/search [запрос] — поиск по сообщениям\n"
         "/translate [текст] — перевод\n"
         "/analyze — анализ тона сообщения\n"
         "/myreminders — мои напоминания\n\n"
-        "<b>Новые инструменты:</b>\n\n"
+        "<b>Инструменты:</b>\n\n"
         "/autoreply on [текст] — включить автоответ\n"
-        "/autoreply off — выключить автоответ\n\n"
+        "/autoreply off — выключить автоответ\n"
         "/note save [текст] — сохранить заметку\n"
         "/note list — список заметок\n"
         "/note delete [id] — удалить заметку\n"
-        "/note search [запрос] — найти заметку\n\n"
-        "/broadcast [текст] — рассылка всем контактам\n\n"
-        "/contact @username — инфо о контакте\n\n"
-        "/export [@username] — экспорт чата\n\n"
-        "/qr save [имя] [текст] — шаблон ответа\n"
-        "/qr list — список шаблонов\n"
-        "/qr use [имя] — показать шаблон\n\n"
-        "<b>Также можно писать обычным текстом:</b>\n"
+        "/broadcast [текст] — рассылка всем\n"
+        "/contact @username — инфо о контакте\n"
+        "/export [@username] — экспорт чата\n"
+        "/qr save/list/use — шаблоны ответов\n"
+        "/access [owner/admins/all] — доступ в группах\n"
+        "/whoami — твой Telegram ID\n\n"
+        "<b>Фото:</b> отправь фото — я опишу что на нём\n\n"
+        "<b>Текстом:</b>\n"
+        "• \"Срочно!\" → приоритет чатов\n"
         "• \"Запомни купить молоко\" → заметка\n"
         "• \"Напиши всем привет\" → рассылка\n"
         "• \"Расскажи про @ivan\" → инфо\n"
-        "• \"Включи автоответ Я занят\" → автоответ\n"
+        "• \"Выключи автоответчик\" → автоответ\n"
     )
     await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_deleted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     limit = 10
     if context.args:
         try:
@@ -345,7 +412,8 @@ async def cmd_deleted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     text = "<b>Последние удалённые сообщения:</b>\n\n"
     for msg in messages:
         name = msg["first_name"] or "Неизвестный"
-        username = f" (@{msg['username']})" if msg.get("username") else ""
+        username = f" @{msg['username']}" if msg.get("username") else ""
+        uid = msg.get("user_id") or ""
         content = msg.get("text") or msg.get("caption") or ""
         media = (
             f" [{MEDIA_LABELS.get(msg['media_type'], msg['media_type'])}]"
@@ -354,7 +422,8 @@ async def cmd_deleted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         date_str = (msg.get("deleted_at") or "")[:16].replace("T", " ")
 
-        text += f"<b>{name}</b>{username}\n"
+        text += f"👤 <b>{name}</b>{username}\n"
+        text += f"🆔 <code>{uid}</code>\n"
         text += f"Удалено: {date_str}\n"
         if content:
             text += f"{content[:200]}\n"
@@ -366,6 +435,8 @@ async def cmd_deleted(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     hours = 24
     if context.args:
         try:
@@ -387,6 +458,8 @@ async def cmd_summary(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     if not context.args:
         await update.message.reply_text(
             "<b>Формат:</b>\n"
@@ -449,6 +522,8 @@ async def cmd_remind(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     pending = await db.get_pending_replies(limit=15)
 
     if not pending:
@@ -458,20 +533,24 @@ async def cmd_pending(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     text = "<b>Ожидают ответа:</b>\n\n"
     for msg in pending:
         name = msg["first_name"] or "Неизвестный"
-        username = f" (@{msg['username']})" if msg.get("username") else ""
+        username = f" @{msg['username']}" if msg.get("username") else ""
+        uid = msg.get("user_id") or ""
         content = (msg.get("text") or "")[:100]
         date_str = (msg.get("date") or "")[:16].replace("T", " ")
 
-        text += f"<b>{name}</b>{username}\n"
-        text += f"{date_str}\n"
+        text += f"👤 <b>{name}</b>{username}\n"
+        text += f"🆔 <code>{uid}</code>\n"
+        text += f"📅 {date_str}\n"
         if content:
-            text += f"{content}\n"
+            text += f"💬 {content}\n"
         text += "\n"
 
     await _safe_reply(update.message, text, parse_mode="HTML")
 
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     hours = 24
     if context.args:
         try:
@@ -500,6 +579,8 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     if not context.args:
         await update.message.reply_text("Использование: /search [запрос]")
         return
@@ -525,6 +606,8 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     text_to_translate = ""
 
     if update.message.reply_to_message:
@@ -550,6 +633,8 @@ async def cmd_translate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     text_to_analyze = ""
 
     if update.message.reply_to_message:
@@ -577,6 +662,8 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def cmd_myreminders(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
+    if not await _check_auth(update):
+        return
     reminders = await db.get_pending_reminders(update.effective_user.id)
 
     if not reminders:
@@ -598,6 +685,8 @@ async def cmd_myreminders(
 async def cmd_autoreply(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
+    if not await _check_auth(update):
+        return
     if not context.args:
         ar = await db.get_autoreply(OWNER_ID)
         if ar:
@@ -645,6 +734,8 @@ async def cmd_autoreply(
 
 
 async def cmd_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     if not context.args:
         await update.message.reply_text(
             "<b>Заметки:</b>\n\n"
@@ -708,6 +799,8 @@ async def cmd_note(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_broadcast(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
+    if not await _check_auth(update):
+        return
     if not context.args:
         await update.message.reply_text(
             "<b>Рассылка:</b>\n/broadcast [текст]\n\n"
@@ -759,6 +852,8 @@ async def cmd_broadcast(
 async def cmd_contact(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
+    if not await _check_auth(update):
+        return
     if not context.args:
         await update.message.reply_text(
             "Использование: /contact @username"
@@ -776,8 +871,10 @@ async def cmd_contact(
     last_seen = (stats.get("last_seen") or "")[:16].replace("T", " ")
     name = stats.get("first_name") or "Неизвестный"
 
+    uid = stats.get("user_id") or ""
     text = (
-        f"<b>Контакт: {name} (@{username})</b>\n\n"
+        f"👤 <b>Контакт: {name}</b> @{username}\n"
+        f"🆔 ID: <code>{uid}</code>\n\n"
         f"Всего сообщений: {stats['total_messages']}\n"
         f"Медиа: {stats['media_count']}\n"
         f"Удалённых: {stats['deleted_count']}\n"
@@ -791,6 +888,8 @@ async def cmd_contact(
 
 
 async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     chat_id = None
     if context.args:
         username = context.args[0].lstrip("@")
@@ -835,6 +934,8 @@ async def cmd_export(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_qr(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not await _check_auth(update):
+        return
     if not context.args:
         await update.message.reply_text(
             "<b>Быстрые ответы:</b>\n\n"
@@ -895,6 +996,23 @@ async def handle_direct_question(
 
     if msg.text.startswith("/"):
         return
+
+    user = update.effective_user
+    chat = update.effective_chat
+
+    if AUTH_PASSWORD and user and not _is_authenticated(user.id):
+        if msg.text.strip() == AUTH_PASSWORD:
+            _authenticated_users.add(user.id)
+            await msg.reply_text(
+                "\U0001f513 Доступ разрешён! Напиши /start чтобы увидеть команды."
+            )
+            return
+        await msg.reply_text("Неверный пароль. Попробуй ещё.")
+        return
+
+    if chat and chat.type != "private":
+        if not await _check_group_access(update):
+            return
 
     chat_id = msg.chat.id
     _add_to_history(chat_id, "user", msg.text)
@@ -1393,6 +1511,8 @@ async def handle_voice_message(
     msg = update.message
     if not msg:
         return
+    if not await _check_auth(update):
+        return
 
     voice = msg.voice or msg.audio
     if not voice:
@@ -1702,6 +1822,8 @@ async def _handle_priority_nl(msg, chat_id: int) -> None:
 
 async def cmd_priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show priority-ranked list of chats that need a reply."""
+    if not await _check_auth(update):
+        return
     msg = update.message
     status_msg = await msg.reply_text(
         "Анализирую чаты\nTools:\n  Pending_check\n  Priority_rank"
@@ -1725,6 +1847,138 @@ async def cmd_priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"  Pending_check ✓ → {len(chats)} чатов\n"
         f"  Priority_rank ✓\n\n{ranking}"
     )
+
+
+# ── Photo handler ────────────────────────────────────────────────────
+
+
+async def handle_photo_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Describe a photo sent by the user using AI vision."""
+    msg = update.message
+    if not msg:
+        return
+    if not await _check_auth(update):
+        return
+
+    photo = msg.photo[-1] if msg.photo else None
+    if not photo:
+        return
+
+    chat_id = msg.chat.id
+    caption = msg.caption or ""
+    question = caption if caption else "Опиши это изображение подробно."
+
+    status_msg = await msg.reply_text(
+        "Анализирую фото\nTools:\n  Photo_download\n  Vision_AI"
+    )
+
+    try:
+        tg_file = await context.bot.get_file(photo.file_id)
+        local_path = os.path.join(
+            tempfile.gettempdir(), f"photo_{msg.message_id}.jpg"
+        )
+        await tg_file.download_to_drive(local_path)
+    except Exception as e:
+        await status_msg.edit_text(
+            f"Анализирую фото\nTools:\n"
+            f"  Photo_download — ошибка: {e}"
+        )
+        return
+
+    await status_msg.edit_text(
+        "Анализирую фото\nTools:\n  Photo_download ✓\n  Vision_AI — анализ..."
+    )
+
+    description = await ai_client.describe_image(local_path, question)
+
+    try:
+        os.remove(local_path)
+    except Exception:
+        pass
+
+    _add_to_history(chat_id, "user", f"[фото] {caption}")
+    _add_to_history(chat_id, "assistant", description)
+
+    await status_msg.edit_text(
+        "Анализирую фото\nTools:\n  Photo_download ✓\n  Vision_AI ✓\n\n"
+        f"{description}"
+    )
+
+
+# ── Whoami command ───────────────────────────────────────────────────
+
+
+async def cmd_whoami(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the user their own Telegram info."""
+    if not await _check_auth(update):
+        return
+    user = update.effective_user
+    if not user:
+        await update.message.reply_text("Не удалось определить пользователя.")
+        return
+
+    username = f"@{user.username}" if user.username else "не указан"
+    lang = user.language_code or "не указан"
+    is_owner = "Да" if user.id == OWNER_ID else "Нет"
+
+    text = (
+        f"<b>Твой профиль:</b>\n\n"
+        f"👤 Имя: <b>{user.first_name or ''} {user.last_name or ''}</b>\n"
+        f"🆔 ID: <code>{user.id}</code>\n"
+        f"📛 Username: {username}\n"
+        f"🌐 Язык: {lang}\n"
+        f"👑 Владелец бота: {is_owner}"
+    )
+    await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+# ── Access command ───────────────────────────────────────────────────
+
+
+async def cmd_access(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set who can use the bot in group chats."""
+    global _group_access_level
+
+    user = update.effective_user
+    if not user or user.id != OWNER_ID:
+        await update.message.reply_text("Только владелец может менять доступ.")
+        return
+
+    if not context.args:
+        levels = {
+            GROUP_ACCESS_OWNER: "только владелец",
+            GROUP_ACCESS_ADMINS: "владелец + админы",
+            GROUP_ACCESS_ALL: "все участники",
+        }
+        current = levels.get(_group_access_level, _group_access_level)
+        await update.message.reply_text(
+            f"<b>Доступ в группах:</b>\n\n"
+            f"Текущий: <b>{current}</b>\n\n"
+            f"/access owner — только владелец\n"
+            f"/access admins — владелец + админы\n"
+            f"/access all — все участники",
+            parse_mode="HTML",
+        )
+        return
+
+    level = context.args[0].lower()
+    if level in ("owner", "admins", "all"):
+        _group_access_level = level
+        labels = {
+            "owner": "только владелец",
+            "admins": "владелец + админы",
+            "all": "все участники",
+        }
+        await update.message.reply_text(
+            f"Доступ в группах: <b>{labels[level]}</b>",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            "Используй: /access owner | admins | all"
+        )
 
 
 # ── Periodic jobs ────────────────────────────────────────────────────
