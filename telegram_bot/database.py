@@ -339,7 +339,7 @@ async def get_known_chats() -> list[dict]:
     async with aiosqlite.connect(DB_PATH) as conn:
         conn.row_factory = aiosqlite.Row
         cursor = await conn.execute(
-            "SELECT DISTINCT chat_id, first_name, username "
+            "SELECT DISTINCT chat_id, user_id, first_name, username "
             "FROM messages WHERE user_id IS NOT NULL "
             "GROUP BY chat_id "
             "ORDER BY MAX(date) DESC LIMIT 50"

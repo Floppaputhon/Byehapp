@@ -646,12 +646,33 @@ async def _handle_message_send(
 
     if not target_chat:
         chats = await db.get_known_chats()
-        if chats:
-            target_chat = chats[0]
+        for c in chats:
+            if c["chat_id"] != chat_id and c.get("user_id") != OWNER_ID:
+                target_chat = c
+                break
 
-    bc = None
-    if target_chat:
-        bc = await db.get_business_connection_for_chat(target_chat["chat_id"])
+    if not target_chat:
+        bc = await db.get_any_business_connection()
+        if not bc:
+            _add_to_history(chat_id, "assistant", f"Нет бизнес-подключения. Текст: {composed}")
+            await status_msg.edit_text(
+                "Отправляю сообщение\n"
+                "Tools:\n  Compose_message ✓\n"
+                "  Chat_lookup — нет бизнес-подключения\n\n"
+                "Подключи бота как бизнес-бота в настройках Telegram."
+            )
+            return
+        target_label = f"@{target_username}" if target_username else "получатель"
+        _add_to_history(chat_id, "assistant", f"Не найден чат {target_label}. Текст: {composed}")
+        await status_msg.edit_text(
+            "Отправляю сообщение\n"
+            "Tools:\n  Compose_message ✓\n"
+            f"  Chat_lookup — не найден чат {target_label}\n\n"
+            "Пользователь должен сначала написать тебе, чтобы бот увидел его через Business API."
+        )
+        return
+
+    bc = await db.get_business_connection_for_chat(target_chat["chat_id"])
     if not bc:
         bc = await db.get_any_business_connection()
 
@@ -665,12 +686,8 @@ async def _handle_message_send(
         )
         return
 
-    send_chat_id = target_chat["chat_id"] if target_chat else bc["user_chat_id"]
-    chat_name = (
-        (target_chat.get("first_name") or f"@{target_username}")
-        if target_chat
-        else f"chat {send_chat_id}"
-    )
+    send_chat_id = target_chat["chat_id"]
+    chat_name = target_chat.get("first_name") or f"@{target_username or send_chat_id}"
 
     try:
         await context.bot.send_message(
