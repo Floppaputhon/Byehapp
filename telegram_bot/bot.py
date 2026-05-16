@@ -40,10 +40,6 @@ def main() -> None:
         Application.builder()
         .token(BOT_TOKEN)
         .request(request)
-        .connect_timeout(30.0)
-        .read_timeout(60.0)
-        .write_timeout(30.0)
-        .pool_timeout(10.0)
         .build()
     )
 
