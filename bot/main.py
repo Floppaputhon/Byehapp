@@ -1,10 +1,10 @@
 import logging
 
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, BusinessConnectionHandler, CommandHandler, MessageHandler, filters
 
 from bot.config import TELEGRAM_BOT_TOKEN
 from bot.database import init_db
-from bot.handlers import handle_business_message, handle_direct_message, start_command
+from bot.handlers import handle_business_connection, handle_business_message, handle_direct_message, start_command
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -25,6 +25,8 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", start_command))
 
+    app.add_handler(BusinessConnectionHandler(handle_business_connection))
+
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND & filters.UpdateType.BUSINESS_MESSAGE,
@@ -34,7 +36,8 @@ def main() -> None:
 
     app.add_handler(
         MessageHandler(
-            filters.TEXT & ~filters.COMMAND & ~filters.UpdateType.EDITED_MESSAGE,
+            filters.TEXT & ~filters.COMMAND & ~filters.UpdateType.EDITED_MESSAGE
+            & ~filters.UpdateType.BUSINESS_MESSAGE,
             handle_direct_message,
         )
     )

@@ -61,6 +61,17 @@ def init_db() -> None:
             )
         """)
 
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS business_connections (
+                connection_id TEXT PRIMARY KEY,
+                owner_id INTEGER NOT NULL,
+                owner_username TEXT,
+                can_reply INTEGER DEFAULT 0,
+                is_enabled INTEGER DEFAULT 1,
+                created_at REAL DEFAULT (strftime('%s', 'now'))
+            )
+        """)
+
         cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
             ("auto_reply", "off"),
@@ -167,6 +178,45 @@ def log_moderation(chat_id: int, user_id: int, message_text: str, action: str, r
             (chat_id, user_id, message_text, action, reason),
         )
         conn.commit()
+
+
+# --- Business connections ---
+
+def save_business_connection(
+    connection_id: str, owner_id: int, owner_username: Optional[str],
+    can_reply: bool, is_enabled: bool,
+) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """INSERT INTO business_connections (connection_id, owner_id, owner_username, can_reply, is_enabled)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(connection_id) DO UPDATE SET
+                 can_reply=?, is_enabled=?, owner_username=?""",
+            (connection_id, owner_id, owner_username, int(can_reply), int(is_enabled),
+             int(can_reply), int(is_enabled), owner_username),
+        )
+        conn.commit()
+
+
+def get_business_connection_owner(connection_id: str) -> Optional[int]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT owner_id FROM business_connections WHERE connection_id = ? AND is_enabled = 1",
+            (connection_id,),
+        ).fetchone()
+        return row["owner_id"] if row else None
+
+
+def get_active_business_connections() -> list[dict[str, object]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT connection_id, owner_id, owner_username, can_reply FROM business_connections WHERE is_enabled = 1"
+        ).fetchall()
+        return [
+            {"connection_id": r["connection_id"], "owner_id": r["owner_id"],
+             "owner_username": r["owner_username"], "can_reply": bool(r["can_reply"])}
+            for r in rows
+        ]
 
 
 def get_moderation_stats_today() -> dict[str, int]:
