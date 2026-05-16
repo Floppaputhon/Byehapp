@@ -1,4 +1,4 @@
-python-telegram-bot==22.7
+python-telegram-bot[job-queue]==22.7
 openai==2.37.0
 python-dotenv==1.2.2
 fastapi==0.136.1
