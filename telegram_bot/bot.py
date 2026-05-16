@@ -50,17 +50,15 @@ def main() -> None:
     # Command handlers (direct messages to the bot)
     app.add_handler(CommandHandler("start", handlers.cmd_start))
     app.add_handler(CommandHandler("help", handlers.cmd_help))
-    app.add_handler(CommandHandler(["deleted", "удалённые"], handlers.cmd_deleted))
-    app.add_handler(CommandHandler(["summary", "итоги"], handlers.cmd_summary))
-    app.add_handler(CommandHandler(["remind", "напомни"], handlers.cmd_remind))
-    app.add_handler(CommandHandler(["pending", "ответить"], handlers.cmd_pending))
-    app.add_handler(CommandHandler(["stats", "статистика"], handlers.cmd_stats))
-    app.add_handler(CommandHandler(["search", "поиск"], handlers.cmd_search))
-    app.add_handler(CommandHandler(["translate", "перевод"], handlers.cmd_translate))
-    app.add_handler(CommandHandler(["analyze", "анализ"], handlers.cmd_analyze))
-    app.add_handler(
-        CommandHandler(["myreminders", "напоминания"], handlers.cmd_myreminders)
-    )
+    app.add_handler(CommandHandler("deleted", handlers.cmd_deleted))
+    app.add_handler(CommandHandler("summary", handlers.cmd_summary))
+    app.add_handler(CommandHandler("remind", handlers.cmd_remind))
+    app.add_handler(CommandHandler("pending", handlers.cmd_pending))
+    app.add_handler(CommandHandler("stats", handlers.cmd_stats))
+    app.add_handler(CommandHandler("search", handlers.cmd_search))
+    app.add_handler(CommandHandler("translate", handlers.cmd_translate))
+    app.add_handler(CommandHandler("analyze", handlers.cmd_analyze))
+    app.add_handler(CommandHandler("myreminders", handlers.cmd_myreminders))
 
     # Periodic reminder check every 60 seconds
     job_queue = app.job_queue
