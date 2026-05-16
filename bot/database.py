@@ -66,11 +66,17 @@ def init_db() -> None:
                 connection_id TEXT PRIMARY KEY,
                 owner_id INTEGER NOT NULL,
                 owner_username TEXT,
+                owner_chat_id INTEGER,
                 can_reply INTEGER DEFAULT 0,
                 is_enabled INTEGER DEFAULT 1,
                 created_at REAL DEFAULT (strftime('%s', 'now'))
             )
         """)
+
+        try:
+            cursor.execute("ALTER TABLE business_connections ADD COLUMN owner_chat_id INTEGER")
+        except sqlite3.OperationalError:
+            pass
 
         cursor.execute("""CREATE TABLE IF NOT EXISTS blacklist (
                 user_id INTEGER PRIMARY KEY,
@@ -223,16 +229,16 @@ def log_moderation(chat_id: int, user_id: int, message_text: str, action: str, r
 
 def save_business_connection(
     connection_id: str, owner_id: int, owner_username: Optional[str],
-    can_reply: bool, is_enabled: bool,
+    can_reply: bool, is_enabled: bool, owner_chat_id: Optional[int] = None,
 ) -> None:
     with get_connection() as conn:
         conn.execute(
-            """INSERT INTO business_connections (connection_id, owner_id, owner_username, can_reply, is_enabled)
-               VALUES (?, ?, ?, ?, ?)
+            """INSERT INTO business_connections (connection_id, owner_id, owner_username, can_reply, is_enabled, owner_chat_id)
+               VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(connection_id) DO UPDATE SET
-                 can_reply=?, is_enabled=?, owner_username=?""",
-            (connection_id, owner_id, owner_username, int(can_reply), int(is_enabled),
-             int(can_reply), int(is_enabled), owner_username),
+                 can_reply=?, is_enabled=?, owner_username=?, owner_chat_id=COALESCE(?, owner_chat_id)""",
+            (connection_id, owner_id, owner_username, int(can_reply), int(is_enabled), owner_chat_id,
+             int(can_reply), int(is_enabled), owner_username, owner_chat_id),
         )
         conn.commit()
 
@@ -244,6 +250,23 @@ def get_business_connection_owner(connection_id: str) -> Optional[int]:
             (connection_id,),
         ).fetchone()
         return row["owner_id"] if row else None
+
+
+def get_owner_chat_id() -> Optional[int]:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT owner_chat_id FROM business_connections WHERE is_enabled = 1 AND owner_chat_id IS NOT NULL LIMIT 1"
+        ).fetchone()
+        return row["owner_chat_id"] if row else None
+
+
+def is_new_business_client(chat_id: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM chat_history WHERE chat_id = ? AND role = 'user'",
+            (chat_id,),
+        ).fetchone()
+        return row["cnt"] <= 1
 
 
 def get_active_business_connections() -> list[dict[str, object]]:

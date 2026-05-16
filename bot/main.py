@@ -7,6 +7,7 @@ from telegram.ext import Application, BusinessConnectionHandler, CommandHandler,
 from bot.config import TELEGRAM_BOT_TOKEN
 from bot.database import init_db
 from bot.handlers import (
+    check_reminders,
     handle_business_connection,
     handle_business_message,
     handle_business_voice,
@@ -82,6 +83,9 @@ def main() -> None:
     )
     webapp_thread.start()
     logger.info("Mini App server started on port %d", WEBAPP_PORT)
+
+    app.job_queue.run_repeating(check_reminders, interval=15, first=5)
+    logger.info("Reminder polling started (every 15s)")
 
     logger.info("Bot started polling...")
     app.run_polling(

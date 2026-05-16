@@ -20,13 +20,17 @@ from bot.database import (
     get_chat_history,
     get_moderation_stats_today,
     get_notes,
+    get_owner_chat_id,
+    get_pending_reminders,
     get_setting,
     get_template,
     is_admin,
     is_auto_reply_on,
     is_blacklisted,
+    is_new_business_client,
     is_user_authenticated,
     log_moderation,
+    mark_reminder_sent,
     remove_from_blacklist,
     save_business_connection,
     save_template,
@@ -47,6 +51,34 @@ BOT_START_TIME = time.time()
 
 def _get_bot_name() -> str:
     return get_setting("bot_name") or "AI Assistant"
+
+
+async def notify_owner(
+    context: ContextTypes.DEFAULT_TYPE, text: str,
+) -> bool:
+    chat_id = get_owner_chat_id()
+    if chat_id is None:
+        logger.debug("No owner chat_id stored, skipping notification")
+        return False
+    try:
+        await context.bot.send_message(chat_id=chat_id, text=text)
+        return True
+    except Exception as e:
+        logger.warning("Could not notify owner: %s", e)
+        return False
+
+
+async def check_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
+    reminders = get_pending_reminders()
+    for r in reminders:
+        try:
+            await context.bot.send_message(
+                chat_id=int(r["chat_id"]),
+                text=f"\u23f0 \u041d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u0435: {r['text']}",
+            )
+        except Exception as e:
+            logger.warning("Could not send reminder %s: %s", r["id"], e)
+        mark_reminder_sent(int(r["id"]))
 
 
 COMMANDS_HELP = (
@@ -101,6 +133,7 @@ async def handle_business_connection(
         owner_username=owner_username,
         can_reply=connection.can_reply,
         is_enabled=connection.is_enabled,
+        owner_chat_id=connection.user_chat_id,
     )
 
     status = "\u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d" if connection.is_enabled else "\u043e\u0442\u043a\u043b\u044e\u0447\u0435\u043d"
@@ -394,9 +427,25 @@ async def handle_business_message(
             await message.delete()
         except Exception as e:
             logger.warning("Could not delete message: %s", e)
+        user_name = message.from_user.username if message.from_user else str(user_id)
+        await notify_owner(
+            context,
+            f"\U0001f6a8 \u0417\u0430\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u0430\u043d\u043e \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435 \u043e\u0442 @{user_name}:\n"
+            f"\u041f\u0440\u0438\u0447\u0438\u043d\u0430: {moderation_result.get('reason', '\u043d\u0435\u0442')}\n"
+            f"\u0422\u0435\u043a\u0441\u0442: {text[:200]}",
+        )
         return
 
     add_message(chat_id, user_id, "user", text)
+
+    if is_new_business_client(chat_id):
+        user_name = message.from_user.username if message.from_user else str(user_id)
+        first_name = message.from_user.first_name if message.from_user else ""
+        await notify_owner(
+            context,
+            f"\U0001f195 \u041d\u043e\u0432\u044b\u0439 \u043a\u043b\u0438\u0435\u043d\u0442: {first_name} (@{user_name})\n"
+            f"\u0421\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0435: {text[:200]}",
+        )
 
     if is_auto_reply_on() and _should_reply(reply_target, user_id, owner_id):
         history = get_chat_history(chat_id)
