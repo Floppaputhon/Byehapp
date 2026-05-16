@@ -1,5 +1,7 @@
 """AI client for vectorengine.ai (OpenAI-compatible API)."""
 
+import re as _re
+
 import aiohttp
 
 from config import AI_API_KEY, AI_API_URL, AI_MODEL
@@ -83,22 +85,40 @@ async def analyze_message(text: str) -> str:
     return await ai_chat(system_prompt, text, max_tokens=300)
 
 
-async def classify_intent(message: str) -> str:
-    system_prompt = (
-        "Классифицируй намерение пользователя. Ответь ОДНИМ словом:\n"
-        "- DIALOG_READ — пользователь спрашивает что происходит в чате/группе, "
-        "кто писал, что обсуждали, просит пересказ\n"
-        "- MESSAGE_SEND — пользователь просит написать/отправить сообщение кому-то прямо сейчас\n"
-        "- SCHEDULE_MESSAGE — пользователь просит написать/отправить сообщение позже, "
-        "в определённое время, запланировать\n"
-        "- GENERAL — обычный вопрос, не связанный с чатами/отправкой\n\n"
-        "Ответь ТОЛЬКО одним словом: DIALOG_READ, MESSAGE_SEND, SCHEDULE_MESSAGE или GENERAL"
-    )
-    result = await ai_chat(system_prompt, message, max_tokens=20)
-    result = result.strip().upper()
-    for intent in ("DIALOG_READ", "MESSAGE_SEND", "SCHEDULE_MESSAGE", "GENERAL"):
-        if intent in result:
-            return intent
+_DIALOG_PATTERNS = _re.compile(
+    r"(?:что\s+(?:происходит|случилось|нового|там|пишут|было)|"
+    r"кто\s+(?:писал|написал|пишет|отвечал)|"
+    r"(?:пересказ|перескажи|расскажи\s+(?:что|кто))|"
+    r"(?:что\s+в\s+(?:чат|груп))|"
+    r"(?:последние|новые)\s+сообщени|"
+    r"(?:что\s+обсуждал|о\s+чём\s+(?:говорил|писал)))",
+    _re.IGNORECASE,
+)
+
+_SCHEDULE_PATTERNS = _re.compile(
+    r"(?:(?:напиши|отправь|пошли|скажи|написать|отправить)\s+.*?"
+    r"(?:через|в\s+\d|позже|потом|завтра|вечером|утром|ночью|запланируй)|"
+    r"запланируй|"
+    r"(?:через\s+\d+\s*(?:мин|час|ч\b|м\b))\s*.*?"
+    r"(?:напиши|отправь|пошли|скажи|написать|отправить))",
+    _re.IGNORECASE,
+)
+
+_SEND_PATTERNS = _re.compile(
+    r"(?:^(?:напиши|отправь|пошли|скажи|написать|отправить)\s+\S|"
+    r"(?:напиши|отправь|пошли)\s+(?:ему|ей|им|туда|в\s+чат))",
+    _re.IGNORECASE,
+)
+
+
+def classify_intent(message: str) -> str:
+    text = message.strip()
+    if _DIALOG_PATTERNS.search(text):
+        return "DIALOG_READ"
+    if _SCHEDULE_PATTERNS.search(text):
+        return "SCHEDULE_MESSAGE"
+    if _SEND_PATTERNS.search(text):
+        return "MESSAGE_SEND"
     return "GENERAL"
 
 

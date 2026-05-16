@@ -1,6 +1,5 @@
 """All bot handlers — business API events, commands, and periodic jobs."""
 
-import asyncio
 import datetime
 import re
 
@@ -59,6 +58,9 @@ MEDIA_LABELS = {
 # ── Business API handlers ────────────────────────────────────────────
 
 
+_seen_connections: set[str] = set()
+
+
 async def handle_business_connection(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -70,6 +72,9 @@ async def handle_business_connection(
         date=conn.date.isoformat() if conn.date else datetime.datetime.now().isoformat(),
         can_reply=1 if conn.can_reply else 0,
     )
+    if conn.id in _seen_connections:
+        return
+    _seen_connections.add(conn.id)
     try:
         await context.bot.send_message(
             chat_id=conn.user.id,
@@ -550,7 +555,7 @@ async def handle_direct_question(
     if msg.text.startswith("/"):
         return
 
-    intent = await ai_client.classify_intent(msg.text)
+    intent = ai_client.classify_intent(msg.text)
 
     if intent == "DIALOG_READ":
         await _handle_dialog_read(msg)
@@ -568,7 +573,6 @@ async def _handle_dialog_read(msg) -> None:
         "Сейчас отвечу на вопрос\n"
         "Tools:\n  Dialog_read"
     )
-    await asyncio.sleep(1)
 
     messages = await db.get_recent_messages(chat_id=None, hours=24)
 
@@ -591,7 +595,6 @@ async def _handle_dialog_read(msg) -> None:
         f"Tools:\n  Dialog_read — прочитано {len(messages)} сообщений ✓\n"
         "  AI_analyze ✓"
     )
-    await asyncio.sleep(1)
     await _safe_reply(msg, answer)
 
 
