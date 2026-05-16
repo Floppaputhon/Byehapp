@@ -8,9 +8,11 @@ from telegram.ext import (
     BusinessConnectionHandler,
     BusinessMessagesDeletedHandler,
     CommandHandler,
+    ContextTypes,
     MessageHandler,
     filters,
 )
+from telegram.request import HTTPXRequest
 
 from config import BOT_TOKEN
 import database as db
@@ -28,7 +30,22 @@ def main() -> None:
         logger.error("BOT_TOKEN is not set! Create a .env file with BOT_TOKEN=...")
         return
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    request = HTTPXRequest(
+        connect_timeout=30.0,
+        read_timeout=60.0,
+        write_timeout=30.0,
+        pool_timeout=10.0,
+    )
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .request(request)
+        .connect_timeout(30.0)
+        .read_timeout(60.0)
+        .write_timeout(30.0)
+        .pool_timeout(10.0)
+        .build()
+    )
 
     # Business API handlers
     app.add_handler(BusinessConnectionHandler(handlers.handle_business_connection))
@@ -80,6 +97,11 @@ def main() -> None:
 
     app.post_init = post_init
 
+    async def error_handler(update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.error("Exception while handling update: %s", context.error)
+
+    app.add_error_handler(error_handler)
+
     logger.info("Bot starting...")
     app.run_polling(
         allowed_updates=[
@@ -89,7 +111,11 @@ def main() -> None:
             "business_message",
             "edited_business_message",
             "deleted_business_messages",
-        ]
+        ],
+        drop_pending_updates=True,
+        pool_timeout=30,
+        connect_timeout=30,
+        read_timeout=60,
     )
 
 
