@@ -93,6 +93,10 @@ def main() -> None:
     app.add_handler(CommandHandler("kick", handlers.cmd_kick))
     app.add_handler(CommandHandler("ban", handlers.cmd_ban))
     app.add_handler(CommandHandler("unban", handlers.cmd_unban))
+    app.add_handler(CommandHandler("unwarn", handlers.cmd_unwarn))
+    app.add_handler(CommandHandler("warnlist", handlers.cmd_warnlist))
+    app.add_handler(CommandHandler("warnlimit", handlers.cmd_warnlimit))
+    app.add_handler(CommandHandler("whoadmin", handlers.cmd_whoadmin))
     app.add_handler(CommandHandler("pin", handlers.cmd_pin))
     app.add_handler(CommandHandler("unpin", handlers.cmd_unpin))
     app.add_handler(CommandHandler("poll", handlers.cmd_poll))
@@ -136,13 +140,22 @@ def main() -> None:
         ),
     )
 
+    # Iris-style text commands in groups (!, ., Ирис, варн, бан, мут...)
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+            handlers.handle_iris_command,
+        ),
+        group=1,
+    )
+
     # Group message tracking + AI Q&A (mention/reply to bot)
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
             handlers.handle_group_question,
         ),
-        group=1,
+        group=2,
     )
     app.add_handler(
         MessageHandler(

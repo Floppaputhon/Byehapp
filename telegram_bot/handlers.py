@@ -19,6 +19,57 @@ _autoreply_sent: set[int] = set()
 _authenticated_users: set[int] = set()
 _flood_tracker: dict[int, dict[int, list]] = {}
 
+_PERIOD_RE = re.compile(
+    r"(\d+)\s*"
+    r"(мин(?:ут[аыу]?)?|час(?:а|ов)?|ч\b|м\b|"
+    r"д(?:ень|ня|ней)?|сут(?:ки|ок)?|"
+    r"недел[яиью]|нед\b|"
+    r"месяц(?:а|ев)?|"
+    r"год(?:а|ов)?)",
+    re.IGNORECASE,
+)
+
+
+def _parse_period(text: str) -> datetime.timedelta | None:
+    m = _PERIOD_RE.search(text)
+    if not m:
+        return None
+    num = int(m.group(1))
+    unit = m.group(2).lower()
+    if unit.startswith("мин") or unit == "м":
+        return datetime.timedelta(minutes=num)
+    if unit.startswith("час") or unit == "ч":
+        return datetime.timedelta(hours=num)
+    if unit.startswith("д") or unit.startswith("сут"):
+        return datetime.timedelta(days=num)
+    if unit.startswith("нед"):
+        return datetime.timedelta(weeks=num)
+    if unit.startswith("месяц"):
+        return datetime.timedelta(days=num * 30)
+    if unit.startswith("год"):
+        return datetime.timedelta(days=num * 365)
+    return None
+
+
+def _format_timedelta(td: datetime.timedelta) -> str:
+    total = int(td.total_seconds())
+    if total < 3600:
+        return f"{total // 60} мин."
+    if total < 86400:
+        return f"{total // 3600} ч."
+    return f"{total // 86400} дн."
+
+
+async def _check_admin(chat, user) -> bool:
+    if user.id == OWNER_ID:
+        return True
+    try:
+        member = await chat.get_member(user.id)
+        return member.status in ("administrator", "creator")
+    except Exception:
+        return False
+
+
 GROUP_ACCESS_OWNER = "owner"
 GROUP_ACCESS_ADMINS = "admins"
 GROUP_ACCESS_ALL = "all"
@@ -2458,20 +2509,15 @@ async def cmd_rules(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Warn a user in the group. 3 warnings = kick."""
+    """Warn a user (Iris-style). Supports period: /warn 2 дня reason."""
     chat = update.effective_chat
     user = update.effective_user
     if not chat or chat.type == "private":
         await update.message.reply_text("Эта команда работает только в группах.")
         return
-    if not user or user.id != OWNER_ID:
-        try:
-            member = await chat.get_member(user.id)
-            if member.status not in ("administrator", "creator"):
-                await update.message.reply_text("Только админы могут выдавать предупреждения.")
-                return
-        except Exception:
-            return
+    if not user or not await _check_admin(chat, user):
+        await update.message.reply_text("Только админы могут выдавать предупреждения.")
+        return
 
     reply = update.message.reply_to_message
     if not reply or not reply.from_user:
@@ -2479,21 +2525,32 @@ async def cmd_warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     target = reply.from_user
-    reason = " ".join(context.args) if context.args else "Нет причины"
-    count = await db.add_warning(chat.id, target.id, reason, user.id)
+    args_text = " ".join(context.args) if context.args else ""
+    period = _parse_period(args_text)
+    expires_at = None
+    if period:
+        expires_at = (datetime.datetime.utcnow() + period).isoformat()
+        reason_text = _PERIOD_RE.sub("", args_text).strip() or "Нет причины"
+    else:
+        reason_text = args_text or "Нет причины"
+
+    mod = await db.get_moderation(chat.id)
+    warn_limit = mod.get("warn_limit", 3) if mod else 3
+    count = await db.add_warning(chat.id, target.id, reason_text, user.id, expires_at)
 
     name = target.first_name or "Пользователь"
+    period_str = f" на {_format_timedelta(period)}" if period else ""
     text = (
-        f"⚠️ <b>{name}</b> получил предупреждение ({count}/3)\n"
-        f"Причина: {reason}"
+        f"⚠️ <b>{name}</b> получил предупреждение{period_str} ({count}/{warn_limit})\n"
+        f"Причина: {reason_text}"
     )
 
-    if count >= 3:
+    if count >= warn_limit:
         try:
             await chat.ban_member(target.id)
             await chat.unban_member(target.id)
             await db.clear_warnings(chat.id, target.id)
-            text += f"\n\n🚫 {name} кикнут за 3 предупреждения!"
+            text += f"\n\n🚫 {name} кикнут за {warn_limit} предупреждений!"
         except Exception as e:
             text += f"\n\nНе удалось кикнуть: {e}"
 
@@ -2501,20 +2558,15 @@ async def cmd_warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Mute a user in the group."""
+    """Mute a user. Supports period: /mute 2 часа reason."""
     chat = update.effective_chat
     user = update.effective_user
     if not chat or chat.type == "private":
         await update.message.reply_text("Эта команда работает только в группах.")
         return
-    if not user or user.id != OWNER_ID:
-        try:
-            member = await chat.get_member(user.id)
-            if member.status not in ("administrator", "creator"):
-                await update.message.reply_text("Только админы могут мутить.")
-                return
-        except Exception:
-            return
+    if not user or not await _check_admin(chat, user):
+        await update.message.reply_text("Только админы могут мутить.")
+        return
 
     reply = update.message.reply_to_message
     if not reply or not reply.from_user:
@@ -2522,15 +2574,14 @@ async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     target = reply.from_user
-    minutes = 15
-    if context.args:
-        try:
-            minutes = int(context.args[0])
-        except ValueError:
-            pass
+    args_text = " ".join(context.args) if context.args else ""
+    period = _parse_period(args_text)
+    if not period:
+        period = datetime.timedelta(weeks=1)
+    reason = _PERIOD_RE.sub("", args_text).strip()
 
     from telegram import ChatPermissions
-    until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=minutes)
+    until = datetime.datetime.now(datetime.timezone.utc) + period
     try:
         await chat.restrict_member(
             target.id,
@@ -2538,10 +2589,10 @@ async def cmd_mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             until_date=until,
         )
         name = target.first_name or "Пользователь"
-        await update.message.reply_text(
-            f"🔇 <b>{name}</b> замьючен на {minutes} мин.",
-            parse_mode="HTML",
-        )
+        text = f"🔇 <b>{name}</b> замьючен на {_format_timedelta(period)}."
+        if reason:
+            text += f"\nПричина: {reason}"
+        await update.message.reply_text(text, parse_mode="HTML")
     except Exception as e:
         await update.message.reply_text(f"Ошибка: {e}")
 
@@ -2624,20 +2675,15 @@ async def cmd_kick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Ban a user from the group."""
+    """Ban a user. Supports period: /ban 2 дня reason. Default=forever."""
     chat = update.effective_chat
     user = update.effective_user
     if not chat or chat.type == "private":
         await update.message.reply_text("Эта команда работает только в группах.")
         return
-    if not user or user.id != OWNER_ID:
-        try:
-            member = await chat.get_member(user.id)
-            if member.status not in ("administrator", "creator"):
-                await update.message.reply_text("Только админы могут банить.")
-                return
-        except Exception:
-            return
+    if not user or not await _check_admin(chat, user):
+        await update.message.reply_text("Только админы могут банить.")
+        return
 
     reply = update.message.reply_to_message
     if not reply or not reply.from_user:
@@ -2645,11 +2691,18 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     target = reply.from_user
+    args_text = " ".join(context.args) if context.args else ""
+    period = _parse_period(args_text)
+    reason = _PERIOD_RE.sub("", args_text).strip()
+
     try:
-        await chat.ban_member(target.id)
+        until_date = None
+        if period:
+            until_date = datetime.datetime.now(datetime.timezone.utc) + period
+        await chat.ban_member(target.id, until_date=until_date)
         name = target.first_name or "Пользователь"
-        reason = " ".join(context.args) if context.args else ""
-        text = f"⛔ <b>{name}</b> забанен."
+        period_str = f" на {_format_timedelta(period)}" if period else " навсегда"
+        text = f"⛔ <b>{name}</b> забанен{period_str}."
         if reason:
             text += f"\nПричина: {reason}"
         await _safe_reply(update.message, text, parse_mode="HTML")
@@ -2925,6 +2978,472 @@ async def _check_moderation(
         return True
 
     return False
+
+
+# ── Iris-style commands (Russian text, no / prefix) ─────────────────
+
+_IRIS_PREFIX_RE = re.compile(
+    r"^(?:[!./]|ирис(?:ка)?\s+)",
+    re.IGNORECASE,
+)
+
+
+def _strip_iris_prefix(text: str) -> str:
+    return _IRIS_PREFIX_RE.sub("", text).strip()
+
+
+_IRIS_COMMANDS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"^варн(?:ы)?\s+лимит\s+(\d+)", re.I), "WARN_LIMIT"),
+    (re.compile(r"^варн(?:ы|лист)\s*$", re.I), "WARNLIST"),
+    (re.compile(r"^мои\s+варн", re.I), "MY_WARNS"),
+    (re.compile(r"^варны\s+", re.I), "USER_WARNS"),
+    (re.compile(r"^-варн", re.I), "UNWARN"),
+    (re.compile(r"^снять\s+(?:все\s+)?варн", re.I), "CLEAR_WARNS"),
+    (re.compile(r"^(?:варн|пред(?:упреждение)?)\s", re.I), "WARN"),
+    (re.compile(r"^(?:мут|заткн(?:уть|и))\s", re.I), "MUTE"),
+    (re.compile(r"^(?:-мут|размут|говори|unmute)", re.I), "UNMUTE"),
+    (re.compile(r"^муты\s*$", re.I), "MUTELIST"),
+    (re.compile(r"^(?:бан|чс)\s", re.I), "BAN"),
+    (re.compile(r"^(?:-бан|разбан|unban)", re.I), "UNBAN"),
+    (re.compile(r"^банлист\s*$", re.I), "BANLIST"),
+    (re.compile(r"^кик\s", re.I), "KICK"),
+    (re.compile(r"^кто\s+админ", re.I), "WHO_ADMIN"),
+    (re.compile(r"^(?:а\s+судьи\s+кто|кто\s+здесь\s+власть)", re.I), "WHO_ADMIN"),
+    (re.compile(r"^позвать\s+(?:админов|модеров)", re.I), "CALL_ADMINS"),
+    (re.compile(r"^созвать\s+(?:модеров|админов)", re.I), "CALL_ADMINS"),
+    (re.compile(r"^модер\s+лог", re.I), "MOD_LOG"),
+]
+
+
+async def handle_iris_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle Iris-style Russian text commands in groups (!, ., Ирис, etc.)."""
+    msg = update.message
+    if not msg or not msg.text:
+        return
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private" or not user:
+        return
+
+    raw = msg.text.strip()
+    if not _IRIS_PREFIX_RE.match(raw) and not any(
+        p.search(raw) for p, _ in _IRIS_COMMANDS
+    ):
+        return
+
+    body = _strip_iris_prefix(raw)
+    if not body:
+        return
+
+    cmd_type = None
+    match = None
+    for pattern, ctype in _IRIS_COMMANDS:
+        m = pattern.search(body)
+        if m:
+            cmd_type = ctype
+            match = m
+            break
+
+    if not cmd_type:
+        return
+
+    reply = msg.reply_to_message
+    target = reply.from_user if reply and reply.from_user else None
+
+    if cmd_type == "WHO_ADMIN":
+        await _iris_who_admin(msg, chat)
+        return
+
+    if cmd_type == "WARNLIST":
+        await _iris_warnlist(msg, chat)
+        return
+
+    if cmd_type == "MY_WARNS":
+        warns = await db.get_warnings(chat.id, user.id)
+        if not warns:
+            await msg.reply_text("У тебя нет предупреждений.")
+        else:
+            lines = [f"⚠️ Твои варны ({len(warns)}):"]
+            for i, w in enumerate(warns, 1):
+                reason = w.get("reason") or "—"
+                lines.append(f"{i}. {reason}")
+            await msg.reply_text("\n".join(lines))
+        return
+
+    if cmd_type == "USER_WARNS":
+        if not target:
+            await msg.reply_text("Ответь на сообщение пользователя.")
+            return
+        warns = await db.get_warnings(chat.id, target.id)
+        name = target.first_name or "Пользователь"
+        if not warns:
+            await msg.reply_text(f"У {name} нет предупреждений.")
+        else:
+            lines = [f"⚠️ Варны {name} ({len(warns)}):"]
+            for i, w in enumerate(warns, 1):
+                reason = w.get("reason") or "—"
+                lines.append(f"{i}. {reason}")
+            await msg.reply_text("\n".join(lines))
+        return
+
+    if cmd_type == "WARN_LIMIT":
+        if not await _check_admin(chat, user):
+            await msg.reply_text("Только админы могут менять лимит варнов.")
+            return
+        new_limit = int(match.group(1))
+        if new_limit < 1 or new_limit > 20:
+            await msg.reply_text("Лимит должен быть от 1 до 20.")
+            return
+        mod = await db.get_moderation(chat.id) or {}
+        await db.set_moderation(
+            chat.id,
+            is_enabled=mod.get("is_enabled", 0),
+            welcome_msg=mod.get("welcome_msg", ""),
+            rules=mod.get("rules", ""),
+            antiflood_max=mod.get("antiflood_max", 5),
+            antiflood_seconds=mod.get("antiflood_seconds", 10),
+            bad_words=mod.get("bad_words", ""),
+        )
+        from database import DB_PATH
+        import aiosqlite
+        async with aiosqlite.connect(DB_PATH) as conn:
+            await conn.execute(
+                "UPDATE moderation SET warn_limit = ? WHERE chat_id = ?",
+                (new_limit, chat.id),
+            )
+            await conn.commit()
+        await msg.reply_text(f"Лимит предупреждений установлен: {new_limit}")
+        return
+
+    if not await _check_admin(chat, user):
+        await msg.reply_text("Только админы могут использовать эту команду.")
+        return
+
+    if cmd_type == "WARN":
+        if not target:
+            await msg.reply_text("Ответь на сообщение пользователя для варна.")
+            return
+        rest = body[match.end():].strip()
+        period = _parse_period(rest)
+        expires_at = None
+        if period:
+            expires_at = (datetime.datetime.utcnow() + period).isoformat()
+            reason = _PERIOD_RE.sub("", rest).strip() or "Нет причины"
+        else:
+            reason = rest or "Нет причины"
+        mod = await db.get_moderation(chat.id)
+        warn_limit = mod.get("warn_limit", 3) if mod else 3
+        count = await db.add_warning(chat.id, target.id, reason, user.id, expires_at)
+        name = target.first_name or "Пользователь"
+        period_str = f" на {_format_timedelta(period)}" if period else ""
+        text = (
+            f"⚠️ <b>{name}</b> получил предупреждение{period_str} "
+            f"({count}/{warn_limit})\nПричина: {reason}"
+        )
+        if count >= warn_limit:
+            try:
+                await chat.ban_member(target.id)
+                await chat.unban_member(target.id)
+                await db.clear_warnings(chat.id, target.id)
+                text += f"\n\n🚫 {name} кикнут за {warn_limit} предупреждений!"
+            except Exception as e:
+                text += f"\n\nНе удалось кикнуть: {e}"
+        await _safe_reply(msg, text, parse_mode="HTML")
+        return
+
+    if cmd_type == "UNWARN":
+        if not target:
+            await msg.reply_text("Ответь на сообщение пользователя для снятия варна.")
+            return
+        removed = await db.remove_last_warning(chat.id, target.id)
+        name = target.first_name or "Пользователь"
+        if removed:
+            count = await db.get_active_warning_count(chat.id, target.id)
+            await msg.reply_text(
+                f"Последнее предупреждение <b>{name}</b> снято. Осталось: {count}",
+                parse_mode="HTML",
+            )
+        else:
+            await msg.reply_text(f"У {name} нет предупреждений.")
+        return
+
+    if cmd_type == "CLEAR_WARNS":
+        if not target:
+            await msg.reply_text("Ответь на сообщение пользователя.")
+            return
+        await db.clear_warnings(chat.id, target.id)
+        name = target.first_name or "Пользователь"
+        await msg.reply_text(
+            f"Все предупреждения <b>{name}</b> сняты.", parse_mode="HTML"
+        )
+        return
+
+    if cmd_type == "MUTE":
+        if not target:
+            await msg.reply_text("Ответь на сообщение пользователя для мута.")
+            return
+        rest = body[match.end():].strip()
+        period = _parse_period(rest)
+        if not period:
+            period = datetime.timedelta(weeks=1)
+        reason = _PERIOD_RE.sub("", rest).strip()
+        from telegram import ChatPermissions
+        until = datetime.datetime.now(datetime.timezone.utc) + period
+        try:
+            await chat.restrict_member(
+                target.id,
+                ChatPermissions(can_send_messages=False),
+                until_date=until,
+            )
+            name = target.first_name or "Пользователь"
+            text = f"🔇 <b>{name}</b> замьючен на {_format_timedelta(period)}."
+            if reason:
+                text += f"\nПричина: {reason}"
+            await msg.reply_text(text, parse_mode="HTML")
+        except Exception as e:
+            await msg.reply_text(f"Ошибка: {e}")
+        return
+
+    if cmd_type == "UNMUTE":
+        if not target:
+            await msg.reply_text("Ответь на сообщение пользователя для размута.")
+            return
+        from telegram import ChatPermissions
+        try:
+            await chat.restrict_member(
+                target.id,
+                ChatPermissions(
+                    can_send_messages=True,
+                    can_send_media_messages=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True,
+                ),
+            )
+            name = target.first_name or "Пользователь"
+            await msg.reply_text(
+                f"🔊 <b>{name}</b> размьючен.", parse_mode="HTML"
+            )
+        except Exception as e:
+            await msg.reply_text(f"Ошибка: {e}")
+        return
+
+    if cmd_type == "MUTELIST":
+        await msg.reply_text(
+            "Список замьюченных можно проверить через настройки группы в Telegram."
+        )
+        return
+
+    if cmd_type == "BAN":
+        if not target:
+            await msg.reply_text("Ответь на сообщение пользователя для бана.")
+            return
+        rest = body[match.end():].strip()
+        period = _parse_period(rest)
+        reason = _PERIOD_RE.sub("", rest).strip()
+        try:
+            until_date = None
+            if period:
+                until_date = datetime.datetime.now(datetime.timezone.utc) + period
+            await chat.ban_member(target.id, until_date=until_date)
+            name = target.first_name or "Пользователь"
+            period_str = f" на {_format_timedelta(period)}" if period else " навсегда"
+            text = f"⛔ <b>{name}</b> забанен{period_str}."
+            if reason:
+                text += f"\nПричина: {reason}"
+            await _safe_reply(msg, text, parse_mode="HTML")
+        except Exception as e:
+            await msg.reply_text(f"Ошибка: {e}")
+        return
+
+    if cmd_type == "UNBAN":
+        if not target:
+            await msg.reply_text("Ответь на сообщение пользователя для разбана.")
+            return
+        try:
+            await chat.unban_member(target.id)
+            name = target.first_name or "Пользователь"
+            await msg.reply_text(
+                f"<b>{name}</b> разбанен.", parse_mode="HTML"
+            )
+        except Exception as e:
+            await msg.reply_text(f"Ошибка: {e}")
+        return
+
+    if cmd_type == "BANLIST":
+        await msg.reply_text(
+            "Список заблокированных доступен в настройках группы → "
+            "Управление группой → Заблокированные."
+        )
+        return
+
+    if cmd_type == "KICK":
+        if not target:
+            await msg.reply_text("Ответь на сообщение пользователя для кика.")
+            return
+        try:
+            await chat.ban_member(target.id)
+            await chat.unban_member(target.id)
+            name = target.first_name or "Пользователь"
+            reason = body[match.end():].strip()
+            text = f"🚫 <b>{name}</b> кикнут."
+            if reason:
+                text += f"\nПричина: {reason}"
+            await _safe_reply(msg, text, parse_mode="HTML")
+        except Exception as e:
+            await msg.reply_text(f"Ошибка: {e}")
+        return
+
+    if cmd_type == "CALL_ADMINS":
+        await _iris_call_admins(msg, chat, context)
+        return
+
+    if cmd_type == "MOD_LOG":
+        warns = await db.get_recent_warnings_all(chat.id, 15)
+        if not warns:
+            await msg.reply_text("Лог модерации пуст.")
+            return
+        lines = ["📋 <b>Модер лог:</b>"]
+        for w in warns:
+            date_str = (w.get("created_at") or "")[:16]
+            reason = w.get("reason") or "—"
+            lines.append(f"• [{date_str}] user:{w['user_id']} → варн (ID {w['id']}): {reason}")
+        await msg.reply_text("\n".join(lines[:20]), parse_mode="HTML")
+        return
+
+
+async def _iris_who_admin(msg, chat) -> None:
+    lines = ["👑 <b>Состав модерации:</b>\n"]
+    try:
+        admins = await chat.get_administrators()
+        for a in admins:
+            name = a.user.first_name or "—"
+            username = f" (@{a.user.username})" if a.user.username else ""
+            role = "👤 Создатель" if a.status == "creator" else "🔧 Админ"
+            lines.append(f"{role} {name}{username}")
+    except Exception as e:
+        lines.append(f"Ошибка: {e}")
+    await msg.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def _iris_warnlist(msg, chat) -> None:
+    warns = await db.get_recent_warnings_all(chat.id, 20)
+    if not warns:
+        await msg.reply_text("Варнлист пуст — предупреждений не было.")
+        return
+    lines = ["⚠️ <b>Последние предупреждения:</b>\n"]
+    for w in warns:
+        date_str = (w.get("created_at") or "")[:16]
+        reason = w.get("reason") or "—"
+        lines.append(f"• [{date_str}] user:{w['user_id']} — {reason}")
+    await msg.reply_text("\n".join(lines), parse_mode="HTML")
+
+
+async def _iris_call_admins(msg, chat, context) -> None:
+    try:
+        admins = await chat.get_administrators()
+        mentions = []
+        for a in admins:
+            if not a.user.is_bot:
+                name = a.user.first_name or "Админ"
+                mentions.append(f'<a href="tg://user?id={a.user.id}">{name}</a>')
+        if mentions:
+            await msg.reply_text(
+                f"🚨 <b>Созыв модерации!</b>\n\n{', '.join(mentions)}",
+                parse_mode="HTML",
+            )
+        else:
+            await msg.reply_text("Не удалось найти админов.")
+    except Exception as e:
+        await msg.reply_text(f"Ошибка: {e}")
+
+
+async def cmd_warnlist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show recent warnings in the chat."""
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    await _iris_warnlist(update.message, chat)
+
+
+async def cmd_whoadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show admin list (Iris-style 'Кто админ')."""
+    chat = update.effective_chat
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    await _iris_who_admin(update.message, chat)
+
+
+async def cmd_unwarn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove last warning from a user."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or not await _check_admin(chat, user):
+        await update.message.reply_text("Только админы могут снимать варны.")
+        return
+    reply = update.message.reply_to_message
+    if not reply or not reply.from_user:
+        await update.message.reply_text("Ответь на сообщение пользователя.")
+        return
+    target = reply.from_user
+    removed = await db.remove_last_warning(chat.id, target.id)
+    name = target.first_name or "Пользователь"
+    if removed:
+        count = await db.get_active_warning_count(chat.id, target.id)
+        await update.message.reply_text(
+            f"Последнее предупреждение <b>{name}</b> снято. Осталось: {count}",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(f"У {name} нет предупреждений.")
+
+
+async def cmd_warnlimit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set warn limit: /warnlimit 5."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if not chat or chat.type == "private":
+        await update.message.reply_text("Эта команда работает только в группах.")
+        return
+    if not user or not await _check_admin(chat, user):
+        await update.message.reply_text("Только админы могут менять лимит варнов.")
+        return
+    if not context.args:
+        mod = await db.get_moderation(chat.id)
+        cur = mod.get("warn_limit", 3) if mod else 3
+        await update.message.reply_text(f"Текущий лимит предупреждений: {cur}")
+        return
+    try:
+        new_limit = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Укажи число: /warnlimit 5")
+        return
+    if new_limit < 1 or new_limit > 20:
+        await update.message.reply_text("Лимит должен быть от 1 до 20.")
+        return
+    mod = await db.get_moderation(chat.id) or {}
+    await db.set_moderation(
+        chat.id,
+        is_enabled=mod.get("is_enabled", 0),
+        welcome_msg=mod.get("welcome_msg", ""),
+        rules=mod.get("rules", ""),
+        antiflood_max=mod.get("antiflood_max", 5),
+        antiflood_seconds=mod.get("antiflood_seconds", 10),
+        bad_words=mod.get("bad_words", ""),
+    )
+    from database import DB_PATH
+    import aiosqlite
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "UPDATE moderation SET warn_limit = ? WHERE chat_id = ?",
+            (new_limit, chat.id),
+        )
+        await conn.commit()
+    await update.message.reply_text(f"Лимит предупреждений: {new_limit}")
 
 
 # ── Periodic jobs ────────────────────────────────────────────────────

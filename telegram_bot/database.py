@@ -107,7 +107,8 @@ async def init_db() -> None:
                 rules TEXT DEFAULT '',
                 antiflood_max INTEGER DEFAULT 5,
                 antiflood_seconds INTEGER DEFAULT 10,
-                bad_words TEXT DEFAULT ''
+                bad_words TEXT DEFAULT '',
+                warn_limit INTEGER DEFAULT 3
             );
 
             CREATE TABLE IF NOT EXISTS warnings (
@@ -116,6 +117,7 @@ async def init_db() -> None:
                 user_id INTEGER NOT NULL,
                 reason TEXT,
                 warned_by INTEGER,
+                expires_at TEXT,
                 created_at TEXT DEFAULT (datetime('now'))
             );
 
@@ -804,17 +806,19 @@ async def set_moderation(chat_id: int, **kwargs) -> None:
 
 
 async def add_warning(
-    chat_id: int, user_id: int, reason: str | None, warned_by: int | None
+    chat_id: int, user_id: int, reason: str | None, warned_by: int | None,
+    expires_at: str | None = None,
 ) -> int:
     async with aiosqlite.connect(DB_PATH) as conn:
         await conn.execute(
-            "INSERT INTO warnings (chat_id, user_id, reason, warned_by) "
-            "VALUES (?, ?, ?, ?)",
-            (chat_id, user_id, reason, warned_by),
+            "INSERT INTO warnings (chat_id, user_id, reason, warned_by, expires_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (chat_id, user_id, reason, warned_by, expires_at),
         )
         await conn.commit()
         cursor = await conn.execute(
-            "SELECT COUNT(*) FROM warnings WHERE chat_id = ? AND user_id = ?",
+            "SELECT COUNT(*) FROM warnings WHERE chat_id = ? AND user_id = ? "
+            "AND (expires_at IS NULL OR expires_at > datetime('now'))",
             (chat_id, user_id),
         )
         row = await cursor.fetchone()
@@ -840,3 +844,41 @@ async def clear_warnings(chat_id: int, user_id: int) -> None:
             (chat_id, user_id),
         )
         await conn.commit()
+
+
+async def remove_last_warning(chat_id: int, user_id: int) -> bool:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cursor = await conn.execute(
+            "SELECT id FROM warnings WHERE chat_id = ? AND user_id = ? "
+            "ORDER BY created_at DESC LIMIT 1",
+            (chat_id, user_id),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return False
+        await conn.execute("DELETE FROM warnings WHERE id = ?", (row[0],))
+        await conn.commit()
+        return True
+
+
+async def get_recent_warnings_all(chat_id: int, limit: int = 20) -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM warnings WHERE chat_id = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (chat_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_active_warning_count(chat_id: int, user_id: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM warnings WHERE chat_id = ? AND user_id = ? "
+            "AND (expires_at IS NULL OR expires_at > datetime('now'))",
+            (chat_id, user_id),
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else 0
