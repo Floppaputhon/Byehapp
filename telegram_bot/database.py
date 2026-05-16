@@ -61,10 +61,22 @@ async def init_db() -> None:
                 UNIQUE(chat_id, message_id)
             );
 
+            CREATE TABLE IF NOT EXISTS scheduled_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                business_connection_id TEXT,
+                text TEXT NOT NULL,
+                send_at TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                is_sent INTEGER DEFAULT 0
+            );
+
             CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
             CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(is_deleted);
             CREATE INDEX IF NOT EXISTS idx_reminders_time ON reminders(remind_at);
             CREATE INDEX IF NOT EXISTS idx_pending ON pending_replies(is_answered);
+            CREATE INDEX IF NOT EXISTS idx_scheduled ON scheduled_messages(send_at);
         """)
         await db.commit()
 
@@ -268,6 +280,69 @@ async def get_message_stats(hours: int = 24) -> list[dict]:
             GROUP BY chat_id, user_id
             ORDER BY msg_count DESC""",
             (cutoff,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def add_scheduled_message(
+    owner_id: int,
+    chat_id: int,
+    business_connection_id: str | None,
+    text: str,
+    send_at: str,
+) -> None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        await conn.execute(
+            "INSERT INTO scheduled_messages "
+            "(owner_id, chat_id, business_connection_id, text, send_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (owner_id, chat_id, business_connection_id, text, send_at),
+        )
+        await conn.commit()
+
+
+async def get_due_scheduled_messages() -> list[dict]:
+    now = datetime.datetime.now().isoformat()
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT * FROM scheduled_messages WHERE send_at <= ? AND is_sent = 0",
+            (now,),
+        )
+        rows = await cursor.fetchall()
+        result = [dict(r) for r in rows]
+        for row in result:
+            await conn.execute(
+                "UPDATE scheduled_messages SET is_sent = 1 WHERE id = ?",
+                (row["id"],),
+            )
+        await conn.commit()
+        return result
+
+
+async def get_business_connection_for_chat(chat_id: int) -> dict | None:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT bc.* FROM business_connections bc "
+            "JOIN messages m ON m.business_connection_id = bc.connection_id "
+            "WHERE m.chat_id = ? AND bc.can_reply = 1 AND bc.is_enabled = 1 "
+            "LIMIT 1",
+            (chat_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+
+async def get_known_chats() -> list[dict]:
+    async with aiosqlite.connect(DB_PATH) as conn:
+        conn.row_factory = aiosqlite.Row
+        cursor = await conn.execute(
+            "SELECT DISTINCT chat_id, first_name, username "
+            "FROM messages WHERE user_id IS NOT NULL "
+            "GROUP BY chat_id "
+            "ORDER BY MAX(date) DESC LIMIT 50"
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]

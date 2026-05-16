@@ -71,6 +71,7 @@ def main() -> None:
     # Periodic reminder check every 60 seconds
     job_queue = app.job_queue
     job_queue.run_repeating(handlers.check_reminders, interval=60, first=10)
+    job_queue.run_repeating(handlers.check_scheduled_messages, interval=30, first=15)
 
     # Initialize DB on startup
     async def post_init(application: Application) -> None:

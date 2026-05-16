@@ -542,7 +542,7 @@ async def cmd_myreminders(
 async def handle_direct_question(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Answer any free-form question via AI."""
+    """AI agent that classifies intent and uses appropriate tools."""
     msg = update.message
     if not msg or not msg.text:
         return
@@ -550,15 +550,176 @@ async def handle_direct_question(
     if msg.text.startswith("/"):
         return
 
+    intent = await ai_client.classify_intent(msg.text)
+
+    if intent == "DIALOG_READ":
+        await _handle_dialog_read(msg)
+    elif intent == "MESSAGE_SEND":
+        await _handle_message_send(msg, context)
+    elif intent == "SCHEDULE_MESSAGE":
+        await _handle_schedule_message(msg, update)
+    else:
+        answer = await ai_client.answer_question(msg.text)
+        await _safe_reply(msg, answer)
+
+
+async def _handle_dialog_read(msg) -> None:
     status_msg = await msg.reply_text(
         "Сейчас отвечу на вопрос\n"
-        "Tools:\nDialog_read"
+        "Tools:\n  Dialog_read"
     )
     await asyncio.sleep(1)
 
-    answer = await ai_client.answer_question(msg.text)
-    await status_msg.delete()
+    messages = await db.get_recent_messages(chat_id=None, hours=24)
+
+    if not messages:
+        await status_msg.edit_text(
+            "Сейчас отвечу на вопрос\n"
+            "Tools:\n  Dialog_read — нет сообщений за последние 24ч"
+        )
+        return
+
+    await status_msg.edit_text(
+        "Сейчас отвечу на вопрос\n"
+        f"Tools:\n  Dialog_read — прочитано {len(messages)} сообщений\n"
+        "  AI_analyze"
+    )
+
+    answer = await ai_client.answer_with_dialog(msg.text, messages)
+    await status_msg.edit_text(
+        "Сейчас отвечу на вопрос\n"
+        f"Tools:\n  Dialog_read — прочитано {len(messages)} сообщений ✓\n"
+        "  AI_analyze ✓"
+    )
+    await asyncio.sleep(1)
     await _safe_reply(msg, answer)
+
+
+async def _handle_message_send(msg, context: ContextTypes.DEFAULT_TYPE) -> None:
+    status_msg = await msg.reply_text(
+        "Отправляю сообщение\n"
+        "Tools:\n  Compose_message"
+    )
+
+    composed = await ai_client.compose_message(msg.text)
+
+    await status_msg.edit_text(
+        "Отправляю сообщение\n"
+        "Tools:\n  Compose_message ✓\n"
+        "  Chat_lookup"
+    )
+
+    chats = await db.get_known_chats()
+
+    if not chats:
+        await status_msg.edit_text(
+            "Отправляю сообщение\n"
+            "Tools:\n  Compose_message ✓\n"
+            "  Chat_lookup — нет доступных чатов\n\n"
+            "Нет чатов с бизнес-подключением. "
+            "Сначала подключи бота как бизнес-бота в настройках Telegram."
+        )
+        return
+
+    target_chat = chats[0]
+    bc = await db.get_business_connection_for_chat(target_chat["chat_id"])
+
+    if not bc:
+        await status_msg.edit_text(
+            "Отправляю сообщение\n"
+            "Tools:\n  Compose_message ✓\n"
+            "  Chat_lookup ✓\n"
+            "  Message_send — нет бизнес-подключения для ответа\n\n"
+            f"Текст сообщения:\n{composed}\n\n"
+            "Не удалось отправить: нет активного бизнес-подключения с правом ответа."
+        )
+        return
+
+    try:
+        await context.bot.send_message(
+            chat_id=target_chat["chat_id"],
+            text=composed,
+            business_connection_id=bc["connection_id"],
+        )
+        chat_name = target_chat.get("first_name") or str(target_chat["chat_id"])
+        await status_msg.edit_text(
+            "Отправляю сообщение\n"
+            "Tools:\n  Compose_message ✓\n"
+            "  Chat_lookup ✓\n"
+            f"  Message_send → {chat_name} ✓\n\n"
+            f"Отправлено: {composed}"
+        )
+    except Exception as e:
+        await status_msg.edit_text(
+            "Отправляю сообщение\n"
+            "Tools:\n  Compose_message ✓\n"
+            "  Chat_lookup ✓\n"
+            f"  Message_send — ошибка: {e}\n\n"
+            f"Текст: {composed}"
+        )
+
+
+async def _handle_schedule_message(msg, update: Update) -> None:
+    status_msg = await msg.reply_text(
+        "Планирую сообщение\n"
+        "Tools:\n  Parse_time"
+    )
+
+    now = datetime.datetime.now()
+    raw = msg.text
+    send_at = None
+
+    minutes_match = re.search(r"(\d+)\s*[мm](?:ин(?:ут)?)?", raw)
+    hours_match = re.search(r"(\d+)\s*[чhн](?:ас(?:а|ов)?)?", raw)
+    clock_match = re.search(r"(\d{1,2}):(\d{2})", raw)
+
+    if clock_match:
+        hour, minute = int(clock_match.group(1)), int(clock_match.group(2))
+        send_at = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if send_at <= now:
+            send_at += datetime.timedelta(days=1)
+    elif hours_match:
+        send_at = now + datetime.timedelta(hours=int(hours_match.group(1)))
+    elif minutes_match:
+        send_at = now + datetime.timedelta(minutes=int(minutes_match.group(1)))
+    else:
+        send_at = now + datetime.timedelta(hours=1)
+
+    await status_msg.edit_text(
+        "Планирую сообщение\n"
+        "Tools:\n  Parse_time ✓\n"
+        "  Compose_message"
+    )
+
+    composed = await ai_client.compose_message(raw)
+
+    await status_msg.edit_text(
+        "Планирую сообщение\n"
+        "Tools:\n  Parse_time ✓\n"
+        "  Compose_message ✓\n"
+        "  Schedule_message"
+    )
+
+    chats = await db.get_known_chats()
+    target_chat_id = chats[0]["chat_id"] if chats else update.effective_chat.id
+    bc = await db.get_business_connection_for_chat(target_chat_id) if chats else None
+
+    await db.add_scheduled_message(
+        owner_id=update.effective_user.id,
+        chat_id=target_chat_id,
+        business_connection_id=bc["connection_id"] if bc else None,
+        text=composed,
+        send_at=send_at.isoformat(),
+    )
+
+    await status_msg.edit_text(
+        "Планирую сообщение\n"
+        "Tools:\n  Parse_time ✓\n"
+        "  Compose_message ✓\n"
+        f"  Schedule_message ✓ → {send_at.strftime('%d.%m %H:%M')}\n\n"
+        f"Запланировано: {composed}\n"
+        f"Время: {send_at.strftime('%d.%m.%Y %H:%M')}"
+    )
 
 
 # ── Periodic jobs ────────────────────────────────────────────────────
@@ -572,6 +733,30 @@ async def check_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await context.bot.send_message(
                 chat_id=r["owner_id"], text=text, parse_mode="HTML"
+            )
+        except Exception:
+            pass
+
+
+async def check_scheduled_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
+    due = await db.get_due_scheduled_messages()
+    for s in due:
+        try:
+            if s.get("business_connection_id"):
+                await context.bot.send_message(
+                    chat_id=s["chat_id"],
+                    text=s["text"],
+                    business_connection_id=s["business_connection_id"],
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=s["chat_id"],
+                    text=s["text"],
+                )
+            await context.bot.send_message(
+                chat_id=s["owner_id"],
+                text=f"<b>Запланированное сообщение отправлено!</b>\n\n{s['text']}",
+                parse_mode="HTML",
             )
         except Exception:
             pass

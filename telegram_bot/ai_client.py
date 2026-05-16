@@ -83,6 +83,25 @@ async def analyze_message(text: str) -> str:
     return await ai_chat(system_prompt, text, max_tokens=300)
 
 
+async def classify_intent(message: str) -> str:
+    system_prompt = (
+        "Классифицируй намерение пользователя. Ответь ОДНИМ словом:\n"
+        "- DIALOG_READ — пользователь спрашивает что происходит в чате/группе, "
+        "кто писал, что обсуждали, просит пересказ\n"
+        "- MESSAGE_SEND — пользователь просит написать/отправить сообщение кому-то прямо сейчас\n"
+        "- SCHEDULE_MESSAGE — пользователь просит написать/отправить сообщение позже, "
+        "в определённое время, запланировать\n"
+        "- GENERAL — обычный вопрос, не связанный с чатами/отправкой\n\n"
+        "Ответь ТОЛЬКО одним словом: DIALOG_READ, MESSAGE_SEND, SCHEDULE_MESSAGE или GENERAL"
+    )
+    result = await ai_chat(system_prompt, message, max_tokens=20)
+    result = result.strip().upper()
+    for intent in ("DIALOG_READ", "MESSAGE_SEND", "SCHEDULE_MESSAGE", "GENERAL"):
+        if intent in result:
+            return intent
+    return "GENERAL"
+
+
 async def answer_question(question: str, context: str = "") -> str:
     system_prompt = (
         "Ты — умный AI-ассистент в Telegram. Отвечай на вопросы пользователя "
@@ -93,3 +112,36 @@ async def answer_question(question: str, context: str = "") -> str:
     if context:
         user_msg = f"Контекст диалога:\n{context}\n\nВопрос: {question}"
     return await ai_chat(system_prompt, user_msg, max_tokens=1500)
+
+
+async def answer_with_dialog(question: str, messages: list[dict]) -> str:
+    formatted = []
+    for msg in messages:
+        name = msg.get("first_name") or "Неизвестный"
+        text = (
+            msg.get("text")
+            or msg.get("caption")
+            or f"[{msg.get('media_type', 'медиа')}]"
+        )
+        date_str = (msg.get("date") or "")[:16].replace("T", " ")
+        formatted.append(f"[{date_str}] {name}: {text}")
+
+    conversation = "\n".join(formatted[-100:])
+
+    system_prompt = (
+        "Ты — умный AI-ассистент в Telegram с доступом к истории чатов. "
+        "Пользователь спрашивает о том, что происходит в его чатах. "
+        "Используй предоставленную историю сообщений чтобы ответить. "
+        "Отвечай кратко и информативно на русском."
+    )
+    user_msg = f"Вопрос: {question}\n\nИстория сообщений:\n{conversation}"
+    return await ai_chat(system_prompt, user_msg, max_tokens=1500)
+
+
+async def compose_message(request: str) -> str:
+    system_prompt = (
+        "Пользователь просит тебя написать сообщение для отправки в Telegram. "
+        "Напиши ТОЛЬКО текст сообщения, без пояснений и кавычек. "
+        "Пиши естественно, как обычный человек в мессенджере."
+    )
+    return await ai_chat(system_prompt, request, max_tokens=500)
