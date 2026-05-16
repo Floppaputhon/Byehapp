@@ -81,3 +81,15 @@ async def analyze_message(text: str) -> str:
         "Отвечай кратко на русском."
     )
     return await ai_chat(system_prompt, text, max_tokens=300)
+
+
+async def answer_question(question: str, context: str = "") -> str:
+    system_prompt = (
+        "Ты — умный AI-ассистент в Telegram. Отвечай на вопросы пользователя "
+        "точно, полезно и кратко. Отвечай на том языке, на котором задан вопрос. "
+        "Если вопрос на русском — отвечай на русском."
+    )
+    user_msg = question
+    if context:
+        user_msg = f"Контекст диалога:\n{context}\n\nВопрос: {question}"
+    return await ai_chat(system_prompt, user_msg, max_tokens=1500)

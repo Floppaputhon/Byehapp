@@ -1,5 +1,6 @@
 """All bot handlers — business API events, commands, and periodic jobs."""
 
+import asyncio
 import datetime
 import re
 
@@ -533,6 +534,31 @@ async def cmd_myreminders(
         text += f"{time_str}{target}\n{r['reminder_text']}\n\n"
 
     await _safe_reply(update.message, text, parse_mode="HTML")
+
+
+# ── Free-form AI Q&A handler ─────────────────────────────────────────
+
+
+async def handle_direct_question(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Answer any free-form question via AI."""
+    msg = update.message
+    if not msg or not msg.text:
+        return
+
+    if msg.text.startswith("/"):
+        return
+
+    status_msg = await msg.reply_text(
+        "Сейчас отвечу на вопрос\n"
+        "Tools:\nDialog_read"
+    )
+    await asyncio.sleep(1)
+
+    answer = await ai_client.answer_question(msg.text)
+    await status_msg.delete()
+    await _safe_reply(msg, answer)
 
 
 # ── Periodic jobs ────────────────────────────────────────────────────

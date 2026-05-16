@@ -60,6 +60,14 @@ def main() -> None:
     app.add_handler(CommandHandler("analyze", handlers.cmd_analyze))
     app.add_handler(CommandHandler("myreminders", handlers.cmd_myreminders))
 
+    # Free-form AI Q&A — must be AFTER command handlers
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+            handlers.handle_direct_question,
+        )
+    )
+
     # Periodic reminder check every 60 seconds
     job_queue = app.job_queue
     job_queue.run_repeating(handlers.check_reminders, interval=60, first=10)
