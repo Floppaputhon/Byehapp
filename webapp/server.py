@@ -13,7 +13,9 @@ from pydantic import BaseModel
 from bot.config import TELEGRAM_BOT_TOKEN
 from bot.database import (
     get_active_business_connections,
+    get_all_templates,
     get_authenticated_user_count,
+    get_blacklist,
     get_moderation_stats_today,
     get_setting,
     is_auto_reply_on,
@@ -83,7 +85,12 @@ async def get_status(request: Request):
 
     reply_target = get_setting("reply_target") or "all"
 
+    bot_name = get_setting("bot_name") or "AI Assistant"
+    bl = get_blacklist()
+    templates = get_all_templates()
+
     return {
+        "bot_name": bot_name,
         "auto_reply": is_auto_reply_on(),
         "reply_target": reply_target,
         "authenticated_users": get_authenticated_user_count(),
@@ -104,6 +111,8 @@ async def get_status(request: Request):
             }
             for c in connections
         ],
+        "blacklist_count": len(bl),
+        "templates_count": len(templates),
     }
 
 

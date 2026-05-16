@@ -11,6 +11,7 @@ from bot.handlers import (
     handle_business_message,
     handle_business_voice,
     handle_direct_message,
+    handle_group_message,
     handle_voice_message,
     start_command,
 )
@@ -62,8 +63,17 @@ def main() -> None:
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND & ~filters.UpdateType.EDITED_MESSAGE
-            & ~filters.UpdateType.BUSINESS_MESSAGE,
+            & ~filters.UpdateType.BUSINESS_MESSAGE & filters.ChatType.PRIVATE,
             handle_direct_message,
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND & ~filters.UpdateType.EDITED_MESSAGE
+            & ~filters.UpdateType.BUSINESS_MESSAGE
+            & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+            handle_group_message,
         )
     )
 

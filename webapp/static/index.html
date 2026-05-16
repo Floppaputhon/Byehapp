@@ -69,6 +69,8 @@
         .feature-icon.teal { background:rgba(0,206,201,0.15); }
         .feature-icon.orange { background:rgba(253,203,110,0.15); }
         .feature-icon.blue { background:rgba(116,185,255,0.15); }
+        .feature-icon.red { background:rgba(255,107,107,0.15); }
+        .feature-icon.green { background:rgba(85,239,196,0.15); }
         .feature-text { font-size:14px; font-weight:500; }
         .feature-desc { font-size:11px; color:var(--text-dim); }
         .empty { text-align:center; padding:24px; color:var(--text-muted); font-size:14px; }
@@ -79,53 +81,71 @@
         .action-btn { display:flex; align-items:center; justify-content:center; gap:8px; width:100%; padding:15px; background:var(--gradient-1); color:white; border:none; border-radius:14px; font-size:15px; font-weight:700; cursor:pointer; transition:all 0.2s; box-shadow:0 4px 16px rgba(108,92,231,0.3); margin-top:16px; }
         .action-btn:active { transform:scale(0.97); opacity:0.85; }
         .divider { height:1px; background:var(--border); margin:12px 0; }
+        .name-input-row { display:flex; gap:10px; margin-top:10px; }
+        .name-input { flex:1; background:var(--bg); border:1px solid var(--border); border-radius:12px; padding:12px 14px; color:var(--text); font-size:15px; font-weight:500; outline:none; transition:border-color 0.2s; }
+        .name-input:focus { border-color:var(--accent); }
+        .name-input::placeholder { color:var(--text-muted); }
+        .save-btn { padding:12px 20px; background:var(--accent); color:white; border:none; border-radius:12px; font-size:14px; font-weight:700; cursor:pointer; transition:all 0.2s; white-space:nowrap; }
+        .save-btn:active { transform:scale(0.95); opacity:0.85; }
+        .save-btn.saved { background:var(--green); }
     </style>
 </head>
 <body>
     <div id="loading" class="loading-screen">
         <div class="loader"></div>
-        <div class="loader-text">Загрузка панели...</div>
+        <div class="loader-text">\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430 \u043f\u0430\u043d\u0435\u043b\u0438...</div>
     </div>
     <div id="app" style="display:none;">
         <div class="hero">
             <div class="hero-glow"></div>
-            <div class="hero-icon">🤖</div>
-            <h1>AI Assistant</h1>
-            <p>Панель управления ботом</p>
+            <div class="hero-icon">\U0001f916</div>
+            <h1 id="botNameTitle">AI Assistant</h1>
+            <p>\u041f\u0430\u043d\u0435\u043b\u044c \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f \u0431\u043e\u0442\u043e\u043c</p>
             <div class="status-pill" id="statusPill">
                 <div class="status-dot"></div>
                 <span id="uptimeText">Online</span>
             </div>
         </div>
-        <div class="section-title">Статистика</div>
+        <div class="section-title">\u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043a\u0430</div>
         <div class="stats-grid">
             <div class="stat-card purple">
-                <div class="stat-icon">👥</div>
+                <div class="stat-icon">\U0001f465</div>
                 <div class="stat-value" id="usersCount">0</div>
-                <div class="stat-label">Пользователей</div>
+                <div class="stat-label">\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u0439</div>
             </div>
             <div class="stat-card teal">
-                <div class="stat-icon">🛡</div>
+                <div class="stat-icon">\U0001f6e1</div>
                 <div class="stat-value" id="moderatedCount">0</div>
-                <div class="stat-label">Проверено</div>
+                <div class="stat-label">\u041f\u0440\u043e\u0432\u0435\u0440\u0435\u043d\u043e</div>
             </div>
             <div class="stat-card red">
-                <div class="stat-icon">🚫</div>
+                <div class="stat-icon">\U0001f6ab</div>
                 <div class="stat-value" id="blockedCount">0</div>
-                <div class="stat-label">Заблокировано</div>
+                <div class="stat-label">\u0417\u0430\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u0430\u043d\u043e</div>
             </div>
             <div class="stat-card blue">
-                <div class="stat-icon">🔗</div>
+                <div class="stat-icon">\U0001f517</div>
                 <div class="stat-value" id="connectionsCount">0</div>
-                <div class="stat-label">Подключений</div>
+                <div class="stat-label">\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0439</div>
             </div>
         </div>
-        <div class="section-title">Управление</div>
+        <div class="section-title">\u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435</div>
         <div class="card">
             <div class="control-row">
                 <div class="control-info">
-                    <div class="control-label">Авто-ответы</div>
-                    <div class="control-desc">AI отвечает на сообщения автоматически</div>
+                    <div class="control-label">\u0418\u043c\u044f \u0431\u043e\u0442\u0430</div>
+                    <div class="control-desc">\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u0435 \u0438\u043c\u044f \u0432\u0430\u0448\u0435\u0433\u043e AI \u0430\u0441\u0441\u0438\u0441\u0442\u0435\u043d\u0442\u0430</div>
+                </div>
+            </div>
+            <div class="name-input-row">
+                <input type="text" id="botNameInput" class="name-input" placeholder="\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u0438\u043c\u044f \u0431\u043e\u0442\u0430..." maxlength="50">
+                <button class="save-btn" id="saveNameBtn" onclick="saveBotName()">\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c</button>
+            </div>
+            <div class="divider"></div>
+            <div class="control-row">
+                <div class="control-info">
+                    <div class="control-label">\u0410\u0432\u0442\u043e-\u043e\u0442\u0432\u0435\u0442\u044b</div>
+                    <div class="control-desc">AI \u043e\u0442\u0432\u0435\u0447\u0430\u0435\u0442 \u043d\u0430 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438</div>
                 </div>
                 <label class="toggle">
                     <input type="checkbox" id="autoReplyToggle" onchange="toggleAutoReply()">
@@ -134,89 +154,142 @@
             </div>
             <div class="divider"></div>
             <div>
-                <div class="control-label">Кому отвечать</div>
-                <div class="control-desc">Выберите кому бот будет отвечать</div>
+                <div class="control-label">\u041a\u043e\u043c\u0443 \u043e\u0442\u0432\u0435\u0447\u0430\u0442\u044c</div>
+                <div class="control-desc">\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043a\u043e\u043c\u0443 \u0431\u043e\u0442 \u0431\u0443\u0434\u0435\u0442 \u043e\u0442\u0432\u0435\u0447\u0430\u0442\u044c</div>
                 <div class="segment-control" id="replyTargetControl">
-                    <button class="segment-btn" data-value="all" onclick="setReplyTarget('all')">Всем</button>
-                    <button class="segment-btn" data-value="admin" onclick="setReplyTarget('admin')">Админам</button>
-                    <button class="segment-btn" data-value="owner" onclick="setReplyTarget('owner')">Владельцу</button>
+                    <button class="segment-btn" data-value="all" onclick="setReplyTarget('all')">\u0412\u0441\u0435\u043c</button>
+                    <button class="segment-btn" data-value="admin" onclick="setReplyTarget('admin')">\u0410\u0434\u043c\u0438\u043d\u0430\u043c</button>
+                    <button class="segment-btn" data-value="owner" onclick="setReplyTarget('owner')">\u0412\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u0443</button>
                 </div>
             </div>
         </div>
-        <div class="section-title">Возможности</div>
+        <div class="section-title">\u0412\u043e\u0437\u043c\u043e\u0436\u043d\u043e\u0441\u0442\u0438</div>
         <div class="feature-list">
             <div class="feature-item">
-                <div class="feature-icon purple">💬</div>
+                <div class="feature-icon purple">\U0001f4ac</div>
                 <div>
-                    <div class="feature-text">AI Авто-ответы</div>
-                    <div class="feature-desc">Контекстные ответы на основе истории чата</div>
+                    <div class="feature-text">AI \u0410\u0432\u0442\u043e-\u043e\u0442\u0432\u0435\u0442\u044b</div>
+                    <div class="feature-desc">\u041a\u043e\u043d\u0442\u0435\u043a\u0441\u0442\u043d\u044b\u0435 \u043e\u0442\u0432\u0435\u0442\u044b \u043d\u0430 \u043e\u0441\u043d\u043e\u0432\u0435 \u0438\u0441\u0442\u043e\u0440\u0438\u0438 \u0447\u0430\u0442\u0430</div>
                 </div>
             </div>
             <div class="feature-item">
-                <div class="feature-icon teal">🎤</div>
+                <div class="feature-icon teal">\U0001f3a4</div>
                 <div>
-                    <div class="feature-text">Расшифровка голосовых</div>
-                    <div class="feature-desc">Whisper AI транскрибирует голосовые сообщения</div>
+                    <div class="feature-text">\u0420\u0430\u0441\u0448\u0438\u0444\u0440\u043e\u0432\u043a\u0430 \u0433\u043e\u043b\u043e\u0441\u043e\u0432\u044b\u0445</div>
+                    <div class="feature-desc">Whisper AI \u0442\u0440\u0430\u043d\u0441\u043a\u0440\u0438\u0431\u0438\u0440\u0443\u0435\u0442 \u0433\u043e\u043b\u043e\u0441\u043e\u0432\u044b\u0435 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u044f</div>
                 </div>
             </div>
             <div class="feature-item">
-                <div class="feature-icon orange">🛡</div>
+                <div class="feature-icon orange">\U0001f6e1</div>
                 <div>
-                    <div class="feature-text">Модерация</div>
-                    <div class="feature-desc">AI фильтрует спам и агрессию</div>
+                    <div class="feature-text">\u041c\u043e\u0434\u0435\u0440\u0430\u0446\u0438\u044f</div>
+                    <div class="feature-desc">AI \u0444\u0438\u043b\u044c\u0442\u0440\u0443\u0435\u0442 \u0441\u043f\u0430\u043c \u0438 \u0430\u0433\u0440\u0435\u0441\u0441\u0438\u044e</div>
                 </div>
             </div>
             <div class="feature-item">
-                <div class="feature-icon blue">💼</div>
+                <div class="feature-icon blue">\U0001f4bc</div>
                 <div>
                     <div class="feature-text">Business API</div>
-                    <div class="feature-desc">Интеграция с Telegram Business</div>
+                    <div class="feature-desc">\u0418\u043d\u0442\u0435\u0433\u0440\u0430\u0446\u0438\u044f \u0441 Telegram Business</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon red">\U0001f6ab</div>
+                <div>
+                    <div class="feature-text">\u0427\u0435\u0440\u043d\u044b\u0439 \u0441\u043f\u0438\u0441\u043e\u043a</div>
+                    <div class="feature-desc">\u0411\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u043a\u0430 \u043d\u0435\u0436\u0435\u043b\u0430\u0442\u0435\u043b\u044c\u043d\u044b\u0445 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u0435\u0439 (!\u0431\u0430\u043d/!\u0440\u0430\u0437\u0431\u0430\u043d)</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon green">\U0001f4dd</div>
+                <div>
+                    <div class="feature-text">\u0428\u0430\u0431\u043b\u043e\u043d\u044b \u043e\u0442\u0432\u0435\u0442\u043e\u0432</div>
+                    <div class="feature-desc">\u0411\u044b\u0441\u0442\u0440\u044b\u0435 \u0448\u0430\u0431\u043b\u043e\u043d\u044b \u0434\u043b\u044f \u0447\u0430\u0441\u0442\u044b\u0445 \u043e\u0442\u0432\u0435\u0442\u043e\u0432 (!\u0448\u0430\u0431\u043b\u043e\u043d)</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon purple">\U0001f310</div>
+                <div>
+                    <div class="feature-text">\u041f\u0435\u0440\u0435\u0432\u043e\u0434</div>
+                    <div class="feature-desc">\u041c\u0433\u043d\u043e\u0432\u0435\u043d\u043d\u044b\u0439 \u043f\u0435\u0440\u0435\u0432\u043e\u0434 \u043d\u0430 \u043b\u044e\u0431\u043e\u0439 \u044f\u0437\u044b\u043a (!\u043f\u0435\u0440\u0435\u0432\u043e\u0434)</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon teal">\U0001f4cb</div>
+                <div>
+                    <div class="feature-text">\u0417\u0430\u043c\u0435\u0442\u043a\u0438 \u043e \u043a\u043b\u0438\u0435\u043d\u0442\u0430\u0445</div>
+                    <div class="feature-desc">CRM-\u0437\u0430\u043c\u0435\u0442\u043a\u0438 \u043e \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f\u0445 (!\u0437\u0430\u043c\u0435\u0442\u043a\u0430)</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon orange">\u23f0</div>
+                <div>
+                    <div class="feature-text">\u041d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f</div>
+                    <div class="feature-desc">\u041d\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f \u043f\u043e \u0442\u0430\u0439\u043c\u0435\u0440\u0443 (!\u043d\u0430\u043f\u043e\u043c\u043d\u0438 5\u043c)</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon blue">\U0001f4d6</div>
+                <div>
+                    <div class="feature-text">\u0420\u0435\u0437\u044e\u043c\u0435 \u0447\u0430\u0442\u0430</div>
+                    <div class="feature-desc">AI-\u0441\u0432\u043e\u0434\u043a\u0430 \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0445 \u0441\u043e\u043e\u0431\u0449\u0435\u043d\u0438\u0439 (!\u0440\u0435\u0437\u044e\u043c\u0435)</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon red">\U0001f465</div>
+                <div>
+                    <div class="feature-text">\u0413\u0440\u0443\u043f\u043f\u043e\u0432\u043e\u0439 \u0440\u0435\u0436\u0438\u043c</div>
+                    <div class="feature-desc">\u041e\u0442\u0432\u0435\u0447\u0430\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043f\u0440\u0438 @\u0443\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u0438 \u0438\u043b\u0438 \u043e\u0442\u0432\u0435\u0442\u0435</div>
                 </div>
             </div>
         </div>
-        <div class="section-title">Бизнес-подключения</div>
+        <div class="section-title">\u0411\u0438\u0437\u043d\u0435\u0441-\u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f</div>
         <div class="card" id="connectionsCard">
-            <div class="empty">Нет активных подключений</div>
+            <div class="empty">\u041d\u0435\u0442 \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0445 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0439</div>
         </div>
-        <button class="action-btn" onclick="loadStatus()">↻ Обновить</button>
+        <button class="action-btn" onclick="loadStatus()">\u21bb \u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c</button>
     </div>
     <script>
-        const tg = window.Telegram.WebApp;
+        var tg = window.Telegram.WebApp;
         tg.ready();
         tg.expand();
-        const API = window.location.origin;
+        var API = window.location.origin;
         function haptic(type) { try { tg.HapticFeedback.impactOccurred(type||"light"); } catch(e) {} }
         async function loadStatus() {
             try {
-                const r = await fetch(API+"/api/status");
-                const d = await r.json();
+                var r = await fetch(API+"/api/status");
+                var d = await r.json();
                 document.getElementById("autoReplyToggle").checked = d.auto_reply;
                 document.getElementById("usersCount").textContent = d.authenticated_users;
                 document.getElementById("moderatedCount").textContent = d.moderation.moderated;
                 document.getElementById("blockedCount").textContent = d.moderation.blocked;
                 document.getElementById("connectionsCount").textContent = d.business_connections.length;
                 var h=d.uptime.hours, m=d.uptime.minutes, s=d.uptime.seconds;
-                document.getElementById("uptimeText").textContent = h+"ч "+m+"м "+s+"с";
+                document.getElementById("uptimeText").textContent = h+"\u0447 "+m+"\u043c "+s+"\u0441";
                 document.querySelectorAll(".segment-btn").forEach(function(btn) {
                     btn.classList.toggle("active", btn.dataset.value === d.reply_target);
                 });
+                if (d.bot_name) {
+                    document.getElementById("botNameTitle").textContent = d.bot_name;
+                    document.getElementById("botNameInput").value = d.bot_name;
+                }
                 var card = document.getElementById("connectionsCard");
                 if (d.business_connections.length === 0) {
-                    card.innerHTML = '<div class="empty">Нет активных подключений</div>';
+                    card.innerHTML = '<div class="empty">\u041d\u0435\u0442 \u0430\u043a\u0442\u0438\u0432\u043d\u044b\u0445 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0439</div>';
                 } else {
                     card.innerHTML = d.business_connections.map(function(c) {
                         var letter = (c.owner_username||"?")[0].toUpperCase();
                         var name = c.owner_username||"Unknown";
                         var cls = c.can_reply?"badge-on":"badge-off";
-                        var label = c.can_reply?"Ответы":"Чтение";
-                        return '<div class="conn-item"><div class="conn-avatar">'+letter+'</div><div class="conn-info"><div class="conn-name">@'+name+'</div><div class="conn-meta">Бизнес-аккаунт</div></div><span class="badge '+cls+'">'+label+'</span></div>';
+                        var label = c.can_reply?"\u041e\u0442\u0432\u0435\u0442\u044b":"\u0427\u0442\u0435\u043d\u0438\u0435";
+                        return '<div class="conn-item"><div class="conn-avatar">'+letter+'</div><div class="conn-info"><div class="conn-name">@'+name+'</div><div class="conn-meta">\u0411\u0438\u0437\u043d\u0435\u0441-\u0430\u043a\u043a\u0430\u0443\u043d\u0442</div></div><span class="badge '+cls+'">'+label+'</span></div>';
                     }).join("");
                 }
                 document.getElementById("loading").style.display = "none";
                 document.getElementById("app").style.display = "block";
             } catch (e) {
                 console.error("Load failed:", e);
-                document.getElementById("loading").innerHTML = '<div class="empty">Ошибка подключения</div>';
+                document.getElementById("loading").innerHTML = '<div class="empty">\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f</div>';
             }
         }
         async function toggleAutoReply() {
@@ -235,6 +308,26 @@
                 await fetch(API+"/api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({key:"reply_target", value:target, init_data:tg.initData||""})});
             } catch(e) { console.error("Setting failed:", e); }
         }
+        async function saveBotName() {
+            var name = document.getElementById("botNameInput").value.trim();
+            if (!name) return;
+            haptic("medium");
+            var btn = document.getElementById("saveNameBtn");
+            try {
+                await fetch(API+"/api/settings", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({key:"bot_name", value:name, init_data:tg.initData||""})});
+                document.getElementById("botNameTitle").textContent = name;
+                btn.textContent = "\u2714";
+                btn.classList.add("saved");
+                setTimeout(function() { btn.textContent = "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c"; btn.classList.remove("saved"); }, 1500);
+            } catch(e) {
+                console.error("Save name failed:", e);
+                btn.textContent = "\u041e\u0448\u0438\u0431\u043a\u0430";
+                setTimeout(function() { btn.textContent = "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c"; }, 1500);
+            }
+        }
+        document.getElementById("botNameInput").addEventListener("keydown", function(e) {
+            if (e.key === "Enter") saveBotName();
+        });
         loadStatus();
         setInterval(loadStatus, 15000);
     </script>

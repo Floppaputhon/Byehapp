@@ -72,6 +72,37 @@ def init_db() -> None:
             )
         """)
 
+        cursor.execute("""CREATE TABLE IF NOT EXISTS blacklist (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                reason TEXT,
+                added_at REAL DEFAULT (strftime('%s', 'now'))
+            )""")
+
+        cursor.execute("""CREATE TABLE IF NOT EXISTS templates (
+                name TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                created_at REAL DEFAULT (strftime('%s', 'now'))
+            )""")
+
+        cursor.execute("""CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                target_user TEXT NOT NULL,
+                note_text TEXT NOT NULL,
+                author_id INTEGER,
+                created_at REAL DEFAULT (strftime('%s', 'now'))
+            )""")
+
+        cursor.execute("""CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                remind_text TEXT NOT NULL,
+                remind_at REAL NOT NULL,
+                sent INTEGER DEFAULT 0,
+                created_at REAL DEFAULT (strftime('%s', 'now'))
+            )""")
+
         cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
             ("auto_reply", "off"),
@@ -79,6 +110,10 @@ def init_db() -> None:
         cursor.execute(
             "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
             ("reply_target", "all"),
+        )
+        cursor.execute(
+            "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+            ("bot_name", "AI Assistant"),
         )
 
         conn.commit()
@@ -221,6 +256,117 @@ def get_active_business_connections() -> list[dict[str, object]]:
              "owner_username": r["owner_username"], "can_reply": bool(r["can_reply"])}
             for r in rows
         ]
+
+
+# --- Blacklist ---
+
+def add_to_blacklist(user_id: int, username: Optional[str], reason: str = "") -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO blacklist (user_id, username, reason) VALUES (?, ?, ?)",
+            (user_id, username, reason),
+        )
+        conn.commit()
+
+
+def remove_from_blacklist(user_id: int) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM blacklist WHERE user_id = ?", (user_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def is_blacklisted(user_id: int) -> bool:
+    with get_connection() as conn:
+        row = conn.execute("SELECT 1 FROM blacklist WHERE user_id = ?", (user_id,)).fetchone()
+        return row is not None
+
+
+def get_blacklist() -> list[dict[str, object]]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT user_id, username, reason FROM blacklist ORDER BY added_at DESC").fetchall()
+        return [{"user_id": r["user_id"], "username": r["username"], "reason": r["reason"]} for r in rows]
+
+
+# --- Templates ---
+
+def save_template(name: str, content: str) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO templates (name, content) VALUES (?, ?)",
+            (name, content),
+        )
+        conn.commit()
+
+
+def get_template(name: str) -> Optional[str]:
+    with get_connection() as conn:
+        row = conn.execute("SELECT content FROM templates WHERE name = ?", (name,)).fetchone()
+        return row["content"] if row else None
+
+
+def delete_template(name: str) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute("DELETE FROM templates WHERE name = ?", (name,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_all_templates() -> list[dict[str, str]]:
+    with get_connection() as conn:
+        rows = conn.execute("SELECT name, content FROM templates ORDER BY name").fetchall()
+        return [{"name": r["name"], "content": r["content"]} for r in rows]
+
+
+# --- Notes ---
+
+def add_note(target_user: str, note_text: str, author_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            "INSERT INTO notes (target_user, note_text, author_id) VALUES (?, ?, ?)",
+            (target_user, note_text, author_id),
+        )
+        conn.commit()
+
+
+def get_notes(target_user: str) -> list[dict[str, object]]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT note_text, created_at FROM notes WHERE target_user = ? ORDER BY created_at DESC LIMIT 10",
+            (target_user,),
+        ).fetchall()
+        return [{"text": r["note_text"], "created_at": r["created_at"]} for r in rows]
+
+
+# --- Reminders ---
+
+def add_reminder(chat_id: int, user_id: int, text: str, remind_at: float) -> int:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO reminders (chat_id, user_id, remind_text, remind_at) VALUES (?, ?, ?, ?)",
+            (chat_id, user_id, text, remind_at),
+        )
+        conn.commit()
+        return cursor.lastrowid or 0
+
+
+def get_pending_reminders() -> list[dict[str, object]]:
+    now = time.time()
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, chat_id, user_id, remind_text FROM reminders WHERE remind_at <= ? AND sent = 0",
+            (now,),
+        ).fetchall()
+        return [
+            {"id": r["id"], "chat_id": r["chat_id"], "user_id": r["user_id"], "text": r["remind_text"]}
+            for r in rows
+        ]
+
+
+def mark_reminder_sent(reminder_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("UPDATE reminders SET sent = 1 WHERE id = ?", (reminder_id,))
+        conn.commit()
 
 
 def get_moderation_stats_today() -> dict[str, int]:
