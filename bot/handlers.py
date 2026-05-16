@@ -71,7 +71,7 @@ async def handle_direct_message(update: Update, context: ContextTypes.DEFAULT_TY
     add_message(chat_id, user_id, "user", text)
 
     history = get_chat_history(chat_id)
-    reply_text = generate_reply(history, text)
+    reply_text = await generate_reply(history, text)
 
     if reply_text:
         add_message(chat_id, 0, "assistant", reply_text)
@@ -90,7 +90,7 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
     if not text:
         return
 
-    moderation_result = moderate_message(text)
+    moderation_result = await moderate_message(text)
     log_moderation(
         chat_id=chat_id,
         user_id=user_id,
@@ -114,7 +114,7 @@ async def handle_business_message(update: Update, context: ContextTypes.DEFAULT_
 
     if is_auto_reply_on():
         history = get_chat_history(chat_id)
-        reply_text = generate_reply(history, text)
+        reply_text = await generate_reply(history, text)
         if reply_text:
             add_message(chat_id, 0, "assistant", reply_text)
             try:
