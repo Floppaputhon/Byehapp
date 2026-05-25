@@ -1,0 +1,12 @@
+name = "burmalda-bot"
+main = "worker.js"
+compatibility_date = "2025-01-15"
+
+# Set BOT_TOKEN and (optionally) WEBHOOK_SECRET via:
+#   npx wrangler secret put BOT_TOKEN
+#   npx wrangler secret put WEBHOOK_SECRET
+#
+# Or in the Cloudflare dashboard: Workers → your worker → Settings → Variables.
+
+[observability]
+enabled = true

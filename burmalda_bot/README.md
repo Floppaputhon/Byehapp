@@ -12,6 +12,13 @@ Telegram-бот для Telegram Business API. Когда вы оффлайн, б
 
 Бот использует [Telegram Business API](https://core.telegram.org/bots/business). Telegram пересылает боту входящие сообщения только когда вы оффлайн — поведение настраивается в самом Telegram.
 
+## Две реализации
+
+- **Python (long-polling)** — этот каталог. Нужен хост, который держит Python-процесс (VPS, домашний ПК, Termux на телефоне, и т.д.).
+- **Cloudflare Workers (webhook, serverless)** — папка [`cloudflare-worker/`](./cloudflare-worker/). **Без своего сервера**, бесплатно, всегда онлайн.
+
+Выбирайте по вкусу. Cloudflare-версия проще в эксплуатации.
+
 ## Требования
 
 - Telegram **Premium** (необходим для Telegram Business)

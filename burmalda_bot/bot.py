@@ -79,15 +79,18 @@ async def handle_business_message(
     if sender is None:
         return
 
-    # Skip messages sent by the business account owner themselves.
+    # In Telegram business chats, message.chat.id equals the OTHER user's
+    # user_id (from the business owner's perspective). So when from.id
+    # differs from chat.id, the sender is the business owner — skip those
+    # to avoid replying to ourselves.
+    if sender.id != message.chat.id:
+        return
+
+    # Belt-and-suspenders: also drop messages whose sender we know is the
+    # owner from the stored business_connection mapping.
     owner_id = _owner_id_for(context, connection_id)
     if owner_id is not None and sender.id == owner_id:
         return
-    # Fallback heuristic for the case where we never received a
-    # business_connection update for this id (e.g. bot restarted): the
-    # owner's outgoing messages always have from_user.is_bot == False AND
-    # message.chat.id == sender.id is NOT a reliable marker, so we rely
-    # on the explicit owner mapping only.
 
     text = _extract_text(message)
     if _contains_magic_word(text):
