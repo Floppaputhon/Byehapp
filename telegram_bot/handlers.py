@@ -1115,6 +1115,8 @@ async def handle_direct_question(
     chat_id = msg.chat.id
     _add_to_history(chat_id, "user", msg.text)
 
+    await context.bot.send_chat_action(chat_id, "typing")
+
     intent = ai_client.classify_intent(msg.text)
 
     if intent == "DIALOG_READ":
@@ -1155,11 +1157,21 @@ async def handle_direct_question(
         await _handle_group_list_nl(msg, chat_id)
     elif intent == "MODERATION_REMOTE":
         await _handle_moderation_remote_nl(msg, context, chat_id)
+    elif intent == "FILE_GENERATE":
+        await _handle_file_generate(msg, context, chat_id)
     else:
+        is_group = chat and chat.type != "private"
+        status_msg = await msg.reply_text("💭 Думаю...")
+        await context.bot.send_chat_action(chat_id, "typing")
         history = _get_history(chat_id)
-        answer = await ai_client.answer_question(msg.text, history=history[:-1])
+        answer = await ai_client.answer_question(
+            msg.text, history=history[:-1], is_group=is_group,
+        )
         _add_to_history(chat_id, "assistant", answer)
-        await _safe_reply(msg, answer)
+        try:
+            await status_msg.edit_text(answer)
+        except Exception:
+            await _safe_reply(msg, answer)
 
 
 async def _handle_dialog_read(msg, chat_id: int) -> None:
@@ -1484,14 +1496,19 @@ async def _handle_broadcast_nl(
     msg, context: ContextTypes.DEFAULT_TYPE, chat_id: int
 ) -> None:
     """Handle broadcast requests from natural language."""
+    raw = msg.text.strip()
+    composed = re.sub(
+        r"^(?:рассылк[аиу]|(?:напиши|отправь|пошли)\s+всем)\s*",
+        "", raw, flags=re.IGNORECASE,
+    ).strip()
+    if not composed:
+        await msg.reply_text("Укажи текст рассылки.\nПример: рассылка Привет всем!")
+        return
+
     status_msg = await msg.reply_text(
-        "Рассылка\nTools:\n  Compose_message"
-    )
-
-    composed = await ai_client.compose_message(msg.text)
-
-    await status_msg.edit_text(
-        "Рассылка\nTools:\n  Compose_message ✓\n  Broadcast_send"
+        f"Рассылка\nTools:\n  Broadcast_send → \"{composed[:40]}...\""
+        if len(composed) > 40
+        else f"Рассылка\nTools:\n  Broadcast_send → \"{composed}\""
     )
 
     chats = await db.get_all_business_chats()
@@ -1500,7 +1517,7 @@ async def _handle_broadcast_nl(
     if not filtered:
         _add_to_history(chat_id, "assistant", "Нет контактов для рассылки.")
         await status_msg.edit_text(
-            "Рассылка\nTools:\n  Compose_message ✓\n"
+            "Рассылка\nTools:\n"
             "  Broadcast_send — нет контактов\n\n"
             "Нет доступных бизнес-контактов для рассылки."
         )
@@ -1521,7 +1538,7 @@ async def _handle_broadcast_nl(
     result = f"Отправлено {sent}/{len(filtered)} контактам: {composed}"
     _add_to_history(chat_id, "assistant", result)
     await status_msg.edit_text(
-        "Рассылка\nTools:\n  Compose_message ✓\n"
+        "Рассылка\nTools:\n"
         f"  Broadcast_send ✓ → {sent}/{len(filtered)}\n\n"
         f"Текст: {composed}"
     )
@@ -1979,6 +1996,56 @@ async def cmd_priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"  Pending_check ✓ → {len(chats)} чатов\n"
         f"  Priority_rank ✓\n\n{ranking}"
     )
+
+
+async def _handle_file_generate(
+    msg, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+) -> None:
+    """Generate a file (HTML, TXT, CSV, JSON, XML) from user request."""
+    fmt = ai_client.detect_file_format(msg.text)
+    status_msg = await msg.reply_text(
+        f"Генерация файла\nTools:\n  File_generate → {fmt.upper()}"
+    )
+    await context.bot.send_chat_action(chat_id, "typing")
+
+    content = await ai_client.generate_file_content(msg.text, fmt)
+
+    await status_msg.edit_text(
+        f"Генерация файла\nTools:\n  File_generate ✓ → {fmt.upper()}\n"
+        f"  File_send"
+    )
+
+    suffix = f".{fmt}"
+    filename = f"generated.{fmt}"
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=suffix, delete=False, encoding="utf-8",
+    ) as f:
+        f.write(content)
+        tmp_path = f.name
+
+    try:
+        await context.bot.send_chat_action(chat_id, "upload_document")
+        with open(tmp_path, "rb") as doc:
+            await msg.reply_document(
+                document=doc,
+                filename=filename,
+                caption=f"Вот ваш {fmt.upper()} файл",
+            )
+        _add_to_history(chat_id, "assistant", f"Сгенерирован {fmt.upper()} файл")
+        await status_msg.edit_text(
+            f"Генерация файла\nTools:\n  File_generate ✓ → {fmt.upper()}\n"
+            f"  File_send ✓\n\nФайл отправлен!"
+        )
+    except Exception as e:
+        await status_msg.edit_text(
+            f"Генерация файла\nTools:\n  File_generate ✓\n"
+            f"  File_send — ошибка: {e}"
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 async def _handle_group_list_nl(msg, chat_id: int) -> None:
@@ -2491,12 +2558,16 @@ async def handle_group_question(
     _add_to_history(chat_id, "user", user_text)
     history = _get_history(chat_id)
 
-    status_msg = await msg.reply_text("Думаю...")
+    await context.bot.send_chat_action(chat_id, "typing")
+    status_msg = await msg.reply_text("💭 Думаю...")
 
     response = await ai_client.answer_question(user_text, history=history[:-1], is_group=True)
     _add_to_history(chat_id, "assistant", response)
 
-    await status_msg.edit_text(response)
+    try:
+        await status_msg.edit_text(response)
+    except Exception:
+        await _safe_reply(msg, response)
 
 
 # ── Photo handler ────────────────────────────────────────────────────

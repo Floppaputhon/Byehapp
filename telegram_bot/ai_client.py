@@ -219,6 +219,15 @@ _MODERATION_REMOTE_PATTERNS = _re.compile(
     _re.IGNORECASE,
 )
 
+_FILE_GENERATE_PATTERNS = _re.compile(
+    r"(?:(?:сделай|создай|сгенерируй|напиши|генерируй|собери|подготовь|оформи)\s+"
+    r"(?:\w+\s+)*?"
+    r"(?:html|txt|текстов\w*|csv|json|xml|файл|страниц|документ|файлик)|"
+    r"(?:упакуй|запакуй|экспортируй|выгрузи)\s+(?:\w+\s+)*?(?:в\s+)?(?:html|txt|csv|json|xml|файл)|"
+    r"(?:html|txt|csv|json)\s+(?:файл|страниц|документ))",
+    _re.IGNORECASE,
+)
+
 
 def classify_intent(message: str) -> str:
     text = message.strip()
@@ -256,6 +265,8 @@ def classify_intent(message: str) -> str:
         return "GROUP_LIST"
     if _MODERATION_REMOTE_PATTERNS.search(text):
         return "MODERATION_REMOTE"
+    if _FILE_GENERATE_PATTERNS.search(text):
+        return "FILE_GENERATE"
     if _SCHEDULE_PATTERNS.search(text):
         return "SCHEDULE_MESSAGE"
     if _SEND_PATTERNS.search(text):
@@ -640,3 +651,50 @@ async def compose_message(request: str) -> str:
         "Верни ТОЛЬКО текст сообщения, без кавычек и пояснений."
     )
     return await ai_chat(system_prompt, request, max_tokens=500)
+
+
+def detect_file_format(text: str) -> str:
+    """Detect requested file format from user message."""
+    t = text.lower()
+    if "html" in t or "хтмл" in t or "страниц" in t:
+        return "html"
+    if "csv" in t:
+        return "csv"
+    if "json" in t or "джейсон" in t:
+        return "json"
+    if "xml" in t:
+        return "xml"
+    return "txt"
+
+
+async def generate_file_content(request: str, fmt: str) -> str:
+    """Generate file content in the requested format."""
+    format_hints = {
+        "html": (
+            "Сгенерируй полную HTML-страницу с <!DOCTYPE html>, <html>, <head>, <body>. "
+            "Добавь красивые CSS стили прямо в <style>. Используй современный дизайн. "
+            "Верни ТОЛЬКО HTML код, без пояснений."
+        ),
+        "txt": (
+            "Сгенерируй текстовый документ. Используй заголовки, абзацы, списки. "
+            "Верни ТОЛЬКО текст документа, без пояснений."
+        ),
+        "csv": (
+            "Сгенерируй CSV файл с заголовками и данными. "
+            "Разделитель — запятая. Верни ТОЛЬКО CSV данные."
+        ),
+        "json": (
+            "Сгенерируй JSON файл с осмысленной структурой. "
+            "Верни ТОЛЬКО валидный JSON, без пояснений."
+        ),
+        "xml": (
+            "Сгенерируй XML файл с осмысленной структурой. "
+            "Верни ТОЛЬКО валидный XML, без пояснений."
+        ),
+    }
+    system_prompt = (
+        f"Ты — генератор файлов. Формат: {fmt.upper()}.\n"
+        f"{format_hints.get(fmt, format_hints['txt'])}\n"
+        "Контент должен быть на русском языке (если не указано иное)."
+    )
+    return await ai_chat(system_prompt, request, max_tokens=3000)
