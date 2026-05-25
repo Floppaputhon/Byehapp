@@ -3067,7 +3067,7 @@ async def handle_iris_command(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "мут, -мут, муты\n"
                 "бан, -бан, банлист\n"
                 "кик, кто админ, позвать админов\n\n"
-                "Пример: !варн спам, .бан 2 дня реклама"
+                "Пример: варн спам, бан 2 дня реклама"
             )
         return
 
