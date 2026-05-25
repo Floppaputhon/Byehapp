@@ -2016,8 +2016,13 @@ async def _handle_group_list_nl(msg, chat_id: int) -> None:
 
 
 _MODER_ACTION_RE = re.compile(
-    r"(замуть|замути|мут(?:ни)?|заткни|забань|бань|банни|кикни|кикнуть|"
-    r"варни|предупреди|размуть|размути|разбань)",
+    r"(замуть|замути|мут(?:ни)?|заткни|забань|забани|бань|банни|бан(?=\s|$)|"
+    r"кикни|кикнуть|кик(?=\s|$)|варни|предупреди|размуть|размути|разбань)",
+    re.IGNORECASE,
+)
+
+_GROUP_NAME_RE = re.compile(
+    r"(?:в\s+групп[уеа]\s+|в\s+)(.+?)(?:\s+(?:забань|забани|бань|бан|замуть|замути|мут|кикни|кик|варни|разбань|размуть|на\s+\d)|$)",
     re.IGNORECASE,
 )
 
@@ -2080,7 +2085,19 @@ async def _handle_moderation_remote_nl(
         )
         return
 
+    group_name_match = re.search(
+        r"в\s+(?:групп[уеа]\s+)?[«\"]?(.+?)[»\"]?"
+        r"(?:\s+(?:забань|забани|бань|бан\b|замуть|замути|мут|кикни|кик\b|варни|разбань|размуть)|$)",
+        text, re.IGNORECASE,
+    )
     group = groups[0]
+    if group_name_match:
+        requested_name = group_name_match.group(1).strip().lower()
+        for g in groups:
+            gname = (g.get("first_name") or "").lower()
+            if requested_name in gname or gname in requested_name:
+                group = g
+                break
     group_id = group["chat_id"]
     group_name = group.get("first_name") or "Группа"
 
