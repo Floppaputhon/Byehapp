@@ -1151,6 +1151,10 @@ async def handle_direct_question(
         await _handle_summary_nl(msg, chat_id)
     elif intent == "PRIORITY":
         await _handle_priority_nl(msg, chat_id)
+    elif intent == "GROUP_LIST":
+        await _handle_group_list_nl(msg, chat_id)
+    elif intent == "MODERATION_REMOTE":
+        await _handle_moderation_remote_nl(msg, context, chat_id)
     else:
         history = _get_history(chat_id)
         answer = await ai_client.answer_question(msg.text, history=history[:-1])
@@ -1975,6 +1979,268 @@ async def cmd_priority(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         f"  Pending_check ✓ → {len(chats)} чатов\n"
         f"  Priority_rank ✓\n\n{ranking}"
     )
+
+
+async def _handle_group_list_nl(msg, chat_id: int) -> None:
+    """Show real group list from database when user asks in private chat."""
+    status_msg = await msg.reply_text(
+        "Проверяю группы\nTools:\n  Group_lookup"
+    )
+    groups = await db.get_known_group_chats()
+    if not groups:
+        answer = (
+            "Я пока не добавлен ни в одну группу, либо ещё не видел "
+            "сообщений в группах.\n\n"
+            "Добавь меня в группу и напиши там хотя бы одно сообщение, "
+            "тогда я запомню её."
+        )
+        _add_to_history(chat_id, "assistant", answer)
+        await status_msg.edit_text(
+            "Проверяю группы\nTools:\n  Group_lookup ✓ → 0 групп\n\n"
+            + answer
+        )
+        return
+
+    lines = []
+    for i, g in enumerate(groups, 1):
+        name = g.get("first_name") or "Группа"
+        gid = g.get("chat_id") or ""
+        lines.append(f"{i}. {name} (ID: {gid})")
+    result = "\n".join(lines)
+    answer = f"Я есть в {len(groups)} группах:\n{result}"
+    _add_to_history(chat_id, "assistant", answer)
+    await status_msg.edit_text(
+        f"Проверяю группы\nTools:\n  Group_lookup ✓ → {len(groups)} групп\n\n"
+        + answer
+    )
+
+
+_MODER_ACTION_RE = re.compile(
+    r"(замуть|замути|мут(?:ни)?|заткни|забань|бань|банни|кикни|кикнуть|"
+    r"варни|предупреди|размуть|размути|разбань)",
+    re.IGNORECASE,
+)
+
+
+async def _handle_moderation_remote_nl(
+    msg, context: ContextTypes.DEFAULT_TYPE, chat_id: int
+) -> None:
+    """Execute moderation actions (mute/ban/kick/warn) from private chat."""
+    text = msg.text.strip()
+    m_action = _MODER_ACTION_RE.search(text)
+    if not m_action:
+        await msg.reply_text("Не понял команду модерации.")
+        return
+
+    action_word = m_action.group(1).lower()
+    if action_word in ("замуть", "замути", "заткни") or action_word.startswith("мут"):
+        action = "mute"
+    elif action_word in ("забань", "бань", "банни"):
+        action = "ban"
+    elif action_word in ("кикни", "кикнуть"):
+        action = "kick"
+    elif action_word in ("варни", "предупреди"):
+        action = "warn"
+    elif action_word in ("размуть", "размути"):
+        action = "unmute"
+    elif action_word == "разбань":
+        action = "unban"
+    else:
+        await msg.reply_text("Не понял действие.")
+        return
+
+    action_labels = {
+        "mute": "Mute_user", "ban": "Ban_user", "kick": "Kick_user",
+        "warn": "Warn_user", "unmute": "Unmute_user", "unban": "Unban_user",
+    }
+    action_label = action_labels.get(action, action)
+
+    target_username = _extract_username(text)
+    if not target_username:
+        await msg.reply_text(
+            "Укажи @username пользователя.\n"
+            "Пример: замуть @user на 10 минут"
+        )
+        return
+
+    status_msg = await msg.reply_text(
+        f"Выполняю модерацию\nTools:\n"
+        f"  {action_label} → @{target_username}\n"
+        f"  Group_lookup"
+    )
+
+    groups = await db.get_known_group_chats()
+    if not groups:
+        _add_to_history(chat_id, "assistant", "Не найдено групп для модерации.")
+        await status_msg.edit_text(
+            f"Выполняю модерацию\nTools:\n"
+            f"  {action_label} → @{target_username}\n"
+            f"  Group_lookup — нет групп\n\n"
+            "Добавь бота в группу сначала."
+        )
+        return
+
+    group = groups[0]
+    group_id = group["chat_id"]
+    group_name = group.get("first_name") or "Группа"
+
+    period = _parse_period(text)
+    reason_text = ""
+    period_part = _PERIOD_RE.sub("", text) if period else text
+    for w in (f"@{target_username}", action_word):
+        period_part = period_part.replace(w, "")
+    reason_text = re.sub(r"\s+", " ", period_part).strip()
+    for noise in ("на", "в группу", "в группе", "минут", "час", "дня", "дней"):
+        reason_text = reason_text.replace(noise, "").strip()
+    reason_text = reason_text.strip(" ,.")
+
+    target_user_id = None
+    try:
+        rows = await db.search_group_messages(group_id, f"@{target_username}", limit=1)
+        if not rows:
+            rows = await db.search_group_messages(group_id, target_username, limit=1)
+        for row in rows:
+            if row.get("username") and row["username"].lower() == target_username.lower():
+                target_user_id = row["user_id"]
+                break
+            if target_user_id is None and row.get("user_id"):
+                target_user_id = row["user_id"]
+    except Exception:
+        pass
+
+    if not target_user_id:
+        _add_to_history(
+            chat_id, "assistant",
+            f"Не найден @{target_username} в группе {group_name}."
+        )
+        await status_msg.edit_text(
+            f"Выполняю модерацию\nTools:\n"
+            f"  {action_label} → @{target_username}\n"
+            f"  Group_lookup → {group_name} ✓\n"
+            f"  User_lookup — @{target_username} не найден в группе\n\n"
+            "Пользователь должен хотя бы раз написать в группе, "
+            "чтобы бот его запомнил."
+        )
+        return
+
+    await status_msg.edit_text(
+        f"Выполняю модерацию\nTools:\n"
+        f"  {action_label} → @{target_username}\n"
+        f"  Group_lookup → {group_name} ✓\n"
+        f"  User_lookup → ID {target_user_id} ✓\n"
+        f"  {action_label}..."
+    )
+
+    from telegram import ChatPermissions
+
+    try:
+        if action == "mute":
+            if not period:
+                period = datetime.timedelta(weeks=1)
+            until = datetime.datetime.now(datetime.timezone.utc) + period
+            await context.bot.restrict_chat_member(
+                chat_id=group_id,
+                user_id=target_user_id,
+                permissions=ChatPermissions(can_send_messages=False),
+                until_date=until,
+            )
+            result = f"🔇 @{target_username} замьючен на {_format_timedelta(period)} в {group_name}"
+
+        elif action == "unmute":
+            await context.bot.restrict_chat_member(
+                chat_id=group_id,
+                user_id=target_user_id,
+                permissions=ChatPermissions(
+                    can_send_messages=True,
+                    can_send_media_messages=True,
+                    can_send_other_messages=True,
+                    can_add_web_page_previews=True,
+                ),
+            )
+            result = f"🔊 @{target_username} размьючен в {group_name}"
+
+        elif action == "ban":
+            if period:
+                until = datetime.datetime.now(datetime.timezone.utc) + period
+                await context.bot.ban_chat_member(
+                    chat_id=group_id, user_id=target_user_id, until_date=until
+                )
+                result = f"🚫 @{target_username} забанен на {_format_timedelta(period)} в {group_name}"
+            else:
+                await context.bot.ban_chat_member(
+                    chat_id=group_id, user_id=target_user_id
+                )
+                result = f"🚫 @{target_username} забанен навсегда в {group_name}"
+
+        elif action == "unban":
+            await context.bot.unban_chat_member(
+                chat_id=group_id, user_id=target_user_id
+            )
+            result = f"✅ @{target_username} разбанен в {group_name}"
+
+        elif action == "kick":
+            await context.bot.ban_chat_member(
+                chat_id=group_id, user_id=target_user_id
+            )
+            await context.bot.unban_chat_member(
+                chat_id=group_id, user_id=target_user_id
+            )
+            result = f"👢 @{target_username} кикнут из {group_name}"
+
+        elif action == "warn":
+            mod = await db.get_moderation(group_id)
+            warn_limit = mod.get("warn_limit", 3) if mod else 3
+            reason = reason_text or "Нет причины"
+            expires_at = None
+            if period:
+                expires_at = (
+                    datetime.datetime.utcnow() + period
+                ).isoformat()
+            count = await db.add_warning(
+                group_id, target_user_id, reason, OWNER_ID, expires_at
+            )
+            result = (
+                f"⚠️ @{target_username} получил предупреждение "
+                f"({count}/{warn_limit}) в {group_name}"
+            )
+            if reason_text:
+                result += f"\nПричина: {reason_text}"
+            if count >= warn_limit:
+                try:
+                    await context.bot.ban_chat_member(
+                        chat_id=group_id, user_id=target_user_id
+                    )
+                    await context.bot.unban_chat_member(
+                        chat_id=group_id, user_id=target_user_id
+                    )
+                    await db.clear_warnings(group_id, target_user_id)
+                    result += f"\n\n🚫 Кикнут за {warn_limit} предупреждений!"
+                except Exception as e:
+                    result += f"\n\nНе удалось кикнуть: {e}"
+        else:
+            result = "Неизвестное действие."
+
+        if reason_text and action in ("mute", "ban"):
+            result += f"\nПричина: {reason_text}"
+
+        _add_to_history(chat_id, "assistant", result)
+        await status_msg.edit_text(
+            f"Выполняю модерацию\nTools:\n"
+            f"  {action_label} → @{target_username}\n"
+            f"  Group_lookup → {group_name} ✓\n"
+            f"  User_lookup → ID {target_user_id} ✓\n"
+            f"  {action_label} ✓\n\n"
+            + result
+        )
+    except Exception as e:
+        _add_to_history(chat_id, "assistant", f"Ошибка модерации: {e}")
+        await status_msg.edit_text(
+            f"Выполняю модерацию\nTools:\n"
+            f"  {action_label} → @{target_username}\n"
+            f"  Group_lookup → {group_name} ✓\n"
+            f"  User_lookup → ID {target_user_id} ✓\n"
+            f"  {action_label} — ошибка: {e}"
+        )
 
 
 # ── Group handlers ───────────────────────────────────────────────────

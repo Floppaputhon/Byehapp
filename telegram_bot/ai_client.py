@@ -204,6 +204,19 @@ _PRIORITY_PATTERNS = _re.compile(
     _re.IGNORECASE,
 )
 
+_GROUP_LIST_PATTERNS = _re.compile(
+    r"(?:(?:в\s+)?(?:каких|какие|список)\s+групп|мои\s+групп|группы\s+(?:бота|мои|список|покажи)|"
+    r"(?:покажи|показать)\s+групп|где\s+(?:ты\s+)?(?:есть|состоишь|добавлен)|"
+    r"(?:в\s+каких|в\s+скольких)\s+(?:группах|чатах)\s+(?:ты|бот))",
+    _re.IGNORECASE,
+)
+
+_MODERATION_REMOTE_PATTERNS = _re.compile(
+    r"(?:(?:замуть|замути|мут(?:ни)?|заткни|забань|бань|банни|кикни|кикнуть|варни|предупреди|размуть|размути|разбань)\s+@\w|"
+    r"(?:замуть|замути|мут(?:ни)?|заткни|забань|бань|банни|кикни|кикнуть|варни|предупреди|размуть|размути|разбань)\s+\S+\s+(?:в\s+групп|на\s+\d))",
+    _re.IGNORECASE,
+)
+
 
 def classify_intent(message: str) -> str:
     text = message.strip()
@@ -237,6 +250,10 @@ def classify_intent(message: str) -> str:
         return "SUMMARY"
     if _PRIORITY_PATTERNS.search(text):
         return "PRIORITY"
+    if _GROUP_LIST_PATTERNS.search(text):
+        return "GROUP_LIST"
+    if _MODERATION_REMOTE_PATTERNS.search(text):
+        return "MODERATION_REMOTE"
     if _SCHEDULE_PATTERNS.search(text):
         return "SCHEDULE_MESSAGE"
     if _SEND_PATTERNS.search(text):
