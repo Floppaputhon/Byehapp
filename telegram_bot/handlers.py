@@ -2210,7 +2210,7 @@ async def handle_group_question(
 
     status_msg = await msg.reply_text("Думаю...")
 
-    response = await ai_client.answer_question(user_text, history=history[:-1])
+    response = await ai_client.answer_question(user_text, history=history[:-1], is_group=True)
     _add_to_history(chat_id, "assistant", response)
 
     await status_msg.edit_text(response)
@@ -2895,6 +2895,21 @@ async def handle_new_member(
         return
 
     for member in msg.new_chat_members:
+        if member.id == context.bot.id:
+            try:
+                await msg.reply_text(
+                    "Привет! Я gemeni — AI-ассистент.\n\n"
+                    "⚠️ Чтобы я видел ВСЕ сообщения в группе "
+                    "(включая Ирис-команды типа !варн, .бан), "
+                    "отключите Group Privacy через @BotFather:\n"
+                    "@BotFather → /mybots → выбери меня → "
+                    "Bot Settings → Group Privacy → Turn off\n\n"
+                    "Также сделайте меня админом для модерации.\n"
+                    "Напишите /help для списка команд."
+                )
+            except Exception:
+                pass
+            continue
         if member.is_bot:
             continue
         name = member.first_name or "Новый участник"
@@ -3003,10 +3018,10 @@ _IRIS_COMMANDS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"^(?:мут|заткн(?:уть|и))\s", re.I), "MUTE"),
     (re.compile(r"^(?:-мут|размут|говори|unmute)", re.I), "UNMUTE"),
     (re.compile(r"^муты\s*$", re.I), "MUTELIST"),
-    (re.compile(r"^(?:бан|чс)\s", re.I), "BAN"),
+    (re.compile(r"^(?:бан|чс)(?:\s|$)", re.I), "BAN"),
     (re.compile(r"^(?:-бан|разбан|unban)", re.I), "UNBAN"),
     (re.compile(r"^банлист\s*$", re.I), "BANLIST"),
-    (re.compile(r"^кик\s", re.I), "KICK"),
+    (re.compile(r"^кик(?:\s|$)", re.I), "KICK"),
     (re.compile(r"^кто\s+админ", re.I), "WHO_ADMIN"),
     (re.compile(r"^(?:а\s+судьи\s+кто|кто\s+здесь\s+власть)", re.I), "WHO_ADMIN"),
     (re.compile(r"^позвать\s+(?:админов|модеров)", re.I), "CALL_ADMINS"),
@@ -3045,6 +3060,15 @@ async def handle_iris_command(update: Update, context: ContextTypes.DEFAULT_TYPE
             break
 
     if not cmd_type:
+        if _IRIS_PREFIX_RE.match(raw):
+            await msg.reply_text(
+                "Не понял команду. Доступные команды:\n"
+                "варн, -варн, варнлист, мои варны\n"
+                "мут, -мут, муты\n"
+                "бан, -бан, банлист\n"
+                "кик, кто админ, позвать админов\n\n"
+                "Пример: !варн спам, .бан 2 дня реклама"
+            )
         return
 
     reply = msg.reply_to_message
