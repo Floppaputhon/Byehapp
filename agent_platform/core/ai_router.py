@@ -123,6 +123,20 @@ class AIRouter:
             (model, owner_id, provider),
         )
 
+    async def update_model(
+        self,
+        *,
+        owner_id: int,
+        provider: str,
+        model: str,
+    ) -> bool:
+        """Update only the default model for a stored provider."""
+        cur = await self._db.execute(
+            "UPDATE ai_keys SET default_model = ? WHERE owner_id = ? AND provider = ?",
+            (model, owner_id, provider),
+        )
+        return cur > 0
+
     # ------------------------------------------------------------------
     # Lookups
 

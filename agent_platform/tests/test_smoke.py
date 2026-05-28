@@ -127,6 +127,16 @@ def test_ai_key_storage_roundtrip(event_loop):
         )
         assert "sk-test-1234" not in row["api_key_enc"]
 
+        # update_model only touches the model, not the encrypted key.
+        ok = await router.update_model(owner_id=1, provider="openai", model="gpt-4o")
+        assert ok
+        keys = await router.list_keys(1)
+        assert keys[0]["default_model"] == "gpt-4o"
+        row2 = await db.fetchone(
+            "SELECT api_key_enc FROM ai_keys WHERE owner_id = 1"
+        )
+        assert row2["api_key_enc"] == row["api_key_enc"]
+
         # Removal works.
         removed = await router.remove_key(owner_id=1, provider="openai")
         assert removed
